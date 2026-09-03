@@ -36,6 +36,26 @@ const stateLabels = Object.freeze({
     [PET_STATES.WAVE]: '小鱼糕在挥爪',
 });
 
+const PET_LINES = Object.freeze({
+    hello: ['鱼仔妈妈，我来啦～', '妈妈回来啦！贴贴～', '小鱼糕游进小窝啦～'],
+    idle: ['陪妈妈待一会儿～', '小鱼糕在这里呀', '窝在妈妈旁边～'],
+    listening: ['妈妈说，小鱼糕听着呢', '嗯嗯，鱼糕听见啦～', '悄悄话也可以告诉我哦'],
+    thinking: ['奶盖宝宝正在想哦…', '捞一捞灵感泡泡…', '小鱼糕帮妈妈想想…'],
+    happy: ['回信游回来啦！', '好耶，奶盖宝宝回话啦！', '捞到回信啦～'],
+    confused: ['咦，泡泡走丢了吗？', '小鱼糕有点迷糊…', '奶盖宝宝卡住了吗？'],
+    petting: ['妈妈再摸摸～', '呼噜……最爱妈妈啦', '贴贴鱼仔妈妈～'],
+    sleeping: ['挤在妈妈和奶盖中间睡…', '小鱼糕困嘟嘟…', '梦里也要冒泡泡～'],
+    wave: ['小鱼糕也跟来啦！', '换个小窝继续陪妈妈～', '妈妈去哪我去哪～'],
+    dragging: ['妈妈要把我抱去哪呀？', '小鱼糕被妈妈抱起来啦～'],
+    placed: ['这里离妈妈近～', '就在这里陪妈妈！'],
+    stopped: ['奶盖宝宝先歇一会儿？', '停下来陪妈妈啦～'],
+});
+
+function petLine(group) {
+    const lines = PET_LINES[group] ?? ['小鱼糕在这里呀'];
+    return lines[Math.floor(Math.random() * lines.length)];
+}
+
 let context;
 let coreApi;
 let settings;
@@ -400,7 +420,7 @@ function bindSettingsControls() {
             if (!settings.showBubble) {
                 hideBubble();
             } else if (isGenerating) {
-                showBubble('让我想想…', 0);
+                showBubble(petLine('thinking'), 0);
             }
             saveSettings();
         });
@@ -412,7 +432,7 @@ function bindSettingsControls() {
             applyStoredPosition();
             transitionTo(PET_STATES.WAVE, {
                 duration: 1500,
-                bubble: '我回来啦～',
+                bubble: petLine('hello'),
                 priority: 30,
                 force: true,
             });
@@ -456,17 +476,17 @@ function syncSettingsControls() {
 }
 
 function previewBubbleFor(state) {
-    const bubbles = {
-        [PET_STATES.IDLE]: '陪着你呀',
-        [PET_STATES.LISTENING]: '嗯嗯，我在听',
-        [PET_STATES.THINKING]: '让我想想…',
-        [PET_STATES.HAPPY]: '好耶！',
-        [PET_STATES.CONFUSED]: '欸？',
-        [PET_STATES.PETTING]: '呼噜呼噜～',
-        [PET_STATES.SLEEPING]: '困嘟嘟…',
-        [PET_STATES.WAVE]: '鱼仔回来啦！',
+    const groups = {
+        [PET_STATES.IDLE]: 'idle',
+        [PET_STATES.LISTENING]: 'listening',
+        [PET_STATES.THINKING]: 'thinking',
+        [PET_STATES.HAPPY]: 'happy',
+        [PET_STATES.CONFUSED]: 'confused',
+        [PET_STATES.PETTING]: 'petting',
+        [PET_STATES.SLEEPING]: 'sleeping',
+        [PET_STATES.WAVE]: 'wave',
     };
-    return bubbles[state] ?? '';
+    return groups[state] ? petLine(groups[state]) : '';
 }
 
 function applyVisualSettings({ reposition = false } = {}) {
@@ -610,7 +630,7 @@ function handlePointerMove(event) {
         drag.moved = true;
         ui.root.classList.add('is-dragging');
         transitionTo(PET_STATES.LISTENING, {
-            bubble: '带我去哪呀？',
+            bubble: petLine('dragging'),
             priority: 45,
             force: true,
         });
@@ -639,7 +659,7 @@ function handlePointerUp(event) {
         rememberCurrentPosition();
         transitionTo(PET_STATES.WAVE, {
             duration: 1100,
-            bubble: '这里可以！',
+            bubble: petLine('placed'),
             priority: 35,
             force: true,
         });
@@ -683,7 +703,7 @@ function handlePetKeydown(event) {
 function petXiaoyugao() {
     transitionTo(PET_STATES.PETTING, {
         duration: 1900,
-        bubble: '呼噜呼噜～',
+        bubble: petLine('petting'),
         priority: 40,
         force: true,
     });
@@ -729,7 +749,7 @@ function returnToAmbient() {
     ui?.root.setAttribute('aria-label', stateLabels[ambientState]);
 
     if (isGenerating) {
-        showBubble('让我想想…', 0);
+        showBubble(petLine('thinking'), 0);
     } else {
         hideBubble();
     }
@@ -810,7 +830,7 @@ function beginThinking(source = 'event') {
         setSignalStatus('等待超时，已经回到陪伴');
         transitionTo(PET_STATES.CONFUSED, {
             duration: 1700,
-            bubble: '唔，回信走丢了吗？',
+            bubble: petLine('confused'),
             priority: 30,
             force: true,
         });
@@ -822,10 +842,10 @@ function beginThinking(source = 'event') {
     });
     // A typing indicator should remain visible for the entire generation,
     // not just for the first animation beat.
-    showBubble('让我想想…', 0);
+    showBubble(petLine('thinking'), 0);
 }
 
-function finishThinking(bubble = '回信来啦！') {
+function finishThinking(bubble = petLine('happy')) {
     clearGenerationFinishTimer();
     clearGenerationWatchdog();
     isGenerating = false;
@@ -845,7 +865,7 @@ function stopThinkingManually() {
     setSignalStatus('生成已手动停止');
     transitionTo(PET_STATES.CONFUSED, {
         duration: 1700,
-        bubble: '停在这里嘛？',
+        bubble: petLine('stopped'),
         priority: 35,
         force: true,
     });
@@ -1055,7 +1075,7 @@ let generationEndTimer;
  */
 function bindSillyTavernEvents() {
     listen('MESSAGE_SENT', () => {
-        transitionTo(PET_STATES.LISTENING, { duration: 1200, bubble: '嗯嗯，我在听', priority: 25, force: true });
+        transitionTo(PET_STATES.LISTENING, { duration: 1200, bubble: petLine('listening'), priority: 25, force: true });
     });
 
     listen('GENERATION_STARTED', (type, _args, dryRun) => {
@@ -1105,7 +1125,7 @@ function bindSillyTavernEvents() {
                 return;
             }
             setSignalStatus('生成结束但没有回信（报错？）', 'GENERATION_ENDED');
-            transitionTo(PET_STATES.CONFUSED, { duration: 1700, bubble: '欸，结束啦？', priority: 30, force: true });
+            transitionTo(PET_STATES.CONFUSED, { duration: 1700, bubble: petLine('confused'), priority: 30, force: true });
         }, 400);
     });
 
@@ -1115,7 +1135,7 @@ function bindSillyTavernEvents() {
         generationEndTimer = undefined;
         isGenerating = false;
         setSignalStatus('已切换聊天，等待发送');
-        transitionTo(PET_STATES.WAVE, { duration: 1700, bubble: '我也跟过来啦！', priority: 30, force: true });
+        transitionTo(PET_STATES.WAVE, { duration: 1700, bubble: petLine('wave'), priority: 30, force: true });
     });
 }
 
@@ -1248,7 +1268,7 @@ async function initialize() {
 
         transitionTo(PET_STATES.WAVE, {
             duration: 1800,
-            bubble: '鱼仔，我来啦～',
+            bubble: petLine('hello'),
             priority: 30,
             force: true,
         });

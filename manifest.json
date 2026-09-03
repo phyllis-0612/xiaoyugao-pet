@@ -4,7 +4,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "奶盖 × 鱼仔（基于 GPT × Ripple）",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "auto_update": false,
     "hooks": {
         "disable": "onDisable"

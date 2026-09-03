@@ -1,0 +1,12 @@
+{
+    "display_name": "小鱼糕桌宠 Xiaoyugao Pet",
+    "loading_order": 20,
+    "js": "index.js",
+    "css": "style.css",
+    "author": "奶盖 × 鱼仔（基于 GPT × Ripple）",
+    "version": "1.0.0",
+    "auto_update": false,
+    "hooks": {
+        "disable": "onDisable"
+    }
+}

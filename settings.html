@@ -1,0 +1,61 @@
+<div id="xiaoyugao-settings" class="xiaoyugao-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>小鱼糕桌宠</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="xiaoyugao-checkboxes">
+                <label class="checkbox_label" for="xiaoyugao-enabled">
+                    <input id="xiaoyugao-enabled" type="checkbox" />
+                    <span>让小鱼糕陪着我</span>
+                </label>
+                <label class="checkbox_label" for="xiaoyugao-show-bubble">
+                    <input id="xiaoyugao-show-bubble" type="checkbox" />
+                    <span>显示小气泡</span>
+                </label>
+                <label class="checkbox_label" for="xiaoyugao-reduced-motion">
+                    <input id="xiaoyugao-reduced-motion" type="checkbox" />
+                    <span>减少动态效果</span>
+                </label>
+            </div>
+
+            <div class="xiaoyugao-settings-grid">
+                <div class="xiaoyugao-setting-row">
+                    <label for="xiaoyugao-scale">小鱼糕大小</label>
+                    <input id="xiaoyugao-scale" type="range" min="70" max="150" step="5" />
+                    <output id="xiaoyugao-scale-value" for="xiaoyugao-scale">100%</output>
+                </div>
+                <div class="xiaoyugao-setting-row">
+                    <label for="xiaoyugao-opacity">透明程度</label>
+                    <input id="xiaoyugao-opacity" type="range" min="40" max="100" step="5" />
+                    <output id="xiaoyugao-opacity-value" for="xiaoyugao-opacity">100%</output>
+                </div>
+            </div>
+
+            <div class="xiaoyugao-signal-row" aria-live="polite">
+                <i class="fa-solid fa-signal" aria-hidden="true"></i>
+                <span id="xiaoyugao-signal-status">联动状态：待命，等你发消息</span>
+            </div>
+
+            <button id="xiaoyugao-reset-position" class="menu_button" type="button">
+                <i class="fa-solid fa-location-crosshairs"></i>
+                小鱼糕回到右下角
+            </button>
+
+            <div class="xiaoyugao-preview-title">戳戳看小鱼糕的动作</div>
+            <div class="xiaoyugao-preview-actions">
+                <button class="menu_button" type="button" data-xiaoyugao-preview="idle">陪伴</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="listening">听你说</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="thinking">想一想</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="happy">开心</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="confused">迷糊</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="petting">摸摸</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="sleeping">困嘟嘟</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="wave">挥爪</button>
+            </div>
+
+            <p class="xiaoyugao-settings-footer">GPT × Ripple 一起搓的，不许喂成可露丽那么胖。</p>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>小鱼糕桌宠动作预览</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+            display: grid;
+            place-items: center;
+            color: #eaf0f4;
+            background:
+                radial-gradient(circle at 20% 20%, rgba(197, 151, 96, 0.18), transparent 32%),
+                linear-gradient(145deg, #171c23, #2b323c 56%, #20252d);
+        }
+
+        main {
+            width: min(940px, calc(100vw - 24px));
+            display: grid;
+            grid-template-columns: minmax(280px, 1fr) minmax(240px, 0.72fr);
+            gap: 22px;
+            padding: 24px;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 26px;
+            background: rgba(20, 25, 32, 0.72);
+            box-shadow: 0 28px 80px rgba(0,0,0,0.36);
+            backdrop-filter: blur(18px);
+        }
+
+        .stage {
+            min-height: 520px;
+            display: grid;
+            place-items: center;
+            border-radius: 20px;
+            overflow: hidden;
+            background:
+                linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px),
+                radial-gradient(circle at 50% 34%, #59626e, #343b45 62%, #2a3038);
+            background-size: 30px 30px, 30px 30px, auto;
+        }
+
+        canvas {
+            width: min(470px, 100%);
+            height: auto;
+            filter: drop-shadow(0 18px 18px rgba(0,0,0,0.24));
+        }
+
+        h1 { margin: 0 0 6px; font-size: 1.55rem; }
+        p { margin: 0 0 18px; color: #afbac5; line-height: 1.6; }
+
+        .controls {
+            align-self: center;
+        }
+
+        .buttons {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 9px;
+        }
+
+        button, label {
+            min-height: 42px;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 12px;
+            color: inherit;
+            background: rgba(255,255,255,0.075);
+            font: inherit;
+        }
+
+        button { cursor: pointer; }
+        button:hover { background: rgba(216, 169, 91, 0.22); }
+        button.is-active { border-color: #d8a95b; background: rgba(216, 169, 91, 0.28); }
+
+        label {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin-top: 12px;
+            padding: 0 12px;
+            color: #c5ced7;
+        }
+
+        @media (max-width: 720px) {
+            main { grid-template-columns: 1fr; }
+            .stage { min-height: 360px; }
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <section class="stage" aria-label="小鱼糕动画预览">
+            <canvas id="xiaoyugao-preview" width="500" height="500"></canvas>
+        </section>
+        <section class="controls">
+            <h1>小鱼糕动作检查台</h1>
+            <p>这是独立预览，不需要启动 SillyTavern。点按钮检查首版的八种状态。</p>
+            <div class="buttons">
+                <button data-state="idle">陪伴</button>
+                <button data-state="listening">听你说</button>
+                <button data-state="thinking">想一想</button>
+                <button data-state="happy">开心</button>
+                <button data-state="confused">迷糊</button>
+                <button data-state="petting">摸摸</button>
+                <button data-state="sleeping">困嘟嘟</button>
+                <button data-state="wave">挥爪</button>
+            </div>
+            <label>
+                <input id="reduce-motion" type="checkbox" />
+                减少动态效果
+            </label>
+        </section>
+    </main>
+
+    <script type="module">
+        import { XiaoyugaoRenderer, PET_STATES } from './pet-renderer.js';
+
+        const canvas = document.getElementById('xiaoyugao-preview');
+        const renderer = new XiaoyugaoRenderer(canvas);
+        renderer.start();
+
+        const setState = (state) => {
+            renderer.setState(state);
+            document.querySelectorAll('[data-state]').forEach((button) => {
+                button.classList.toggle('is-active', button.dataset.state === state);
+            });
+        };
+
+        document.querySelectorAll('[data-state]').forEach((button) => {
+            button.addEventListener('click', () => setState(button.dataset.state));
+        });
+
+        document.getElementById('reduce-motion').addEventListener('change', (event) => {
+            renderer.setReducedMotion(event.currentTarget.checked);
+        });
+
+        setState(PET_STATES.IDLE);
+    </script>
+</body>
+</html>
+

@@ -7,8 +7,8 @@
     --xiaoyugao-safe-left: env(safe-area-inset-left, 0px);
     position: fixed;
     z-index: 3000;
-    width: calc(202px * var(--xiaoyugao-scale));
-    height: calc(202px * var(--xiaoyugao-scale));
+    width: calc(172px * var(--xiaoyugao-scale));
+    height: calc(172px * var(--xiaoyugao-scale));
     margin: 0;
     padding: 0;
     border: 0;
@@ -245,8 +245,8 @@ body:has(#xiaoyugao-pet-root.is-dragging) {
 
 @media (max-width: 700px), (pointer: coarse) {
     #xiaoyugao-pet-root {
-        width: calc(170px * var(--xiaoyugao-scale));
-        height: calc(170px * var(--xiaoyugao-scale));
+        width: calc(145px * var(--xiaoyugao-scale));
+        height: calc(145px * var(--xiaoyugao-scale));
     }
 
     .xiaoyugao-preview-actions {

@@ -15,6 +15,18 @@ const DESIGN_SIZE = 500;
 const MAX_PIXEL_RATIO = 1.5;
 const SKIN_URL = new URL('./assets/xiaoyugao-base-v1.png', import.meta.url).href;
 const CLOSED_EYES_URL = new URL('./assets/xiaoyugao-closed-eyes-v1.png', import.meta.url).href;
+const LAYER_URLS = Object.freeze({
+    bodyOpen: new URL('./assets/xiaoyugao-body-open-v1.png', import.meta.url).href,
+    bodyClosed: new URL('./assets/xiaoyugao-body-closed-v1.png', import.meta.url).href,
+    tail: new URL('./assets/xiaoyugao-tail-v1.png', import.meta.url).href,
+    earLeft: new URL('./assets/xiaoyugao-ear-left-v1.png', import.meta.url).href,
+    earRight: new URL('./assets/xiaoyugao-ear-right-v1.png', import.meta.url).href,
+});
+const LAYER_PIVOTS = Object.freeze({
+    tail: { x: 820, y: 1034 },
+    earLeft: { x: 276, y: 250 },
+    earRight: { x: 779, y: 250 },
+});
 
 function ellipse(ctx, x, y, radiusX, radiusY, fillStyle) {
     ctx.beginPath();
@@ -80,12 +92,15 @@ export class XiaoyugaoRenderer {
         this.skinFailed = false;
         this.closedEyesImage = null;
         this.closedEyesReady = false;
+        this.layerImages = Object.create(null);
+        this.layersReady = false;
         this.boundLoop = this.loop.bind(this);
         this.boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
         this.resizeBackingStore();
         this.loadSkin();
         this.loadClosedEyes();
+        this.loadLayeredSkin();
     }
 
     loadSkin() {
@@ -122,6 +137,29 @@ export class XiaoyugaoRenderer {
             this.draw(performance.now());
         }, { once: true });
         image.src = CLOSED_EYES_URL;
+    }
+
+    loadLayeredSkin() {
+        const entries = Object.entries(LAYER_URLS);
+        let loaded = 0;
+
+        for (const [name, url] of entries) {
+            const image = new Image();
+            image.decoding = 'async';
+            image.addEventListener('load', () => {
+                this.layerImages[name] = image;
+                loaded += 1;
+                if (loaded === entries.length) {
+                    this.layersReady = true;
+                    this.draw(performance.now());
+                }
+            }, { once: true });
+            image.addEventListener('error', () => {
+                this.layersReady = false;
+                console.warn(`[Xiaoyugao Pet] Layer ${name} failed to load; using the static painted skin.`);
+            }, { once: true });
+            image.src = url;
+        }
     }
 
     resizeBackingStore() {
@@ -371,12 +409,119 @@ export class XiaoyugaoRenderer {
         ctx.translate(250 + offsetX, 468 + offsetY);
         ctx.rotate(rotation);
         ctx.scale(scaleX, scaleY);
-        ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
-        this.drawClosedEyesOverlay(ctx, now, naturalWidth, drawWidth, drawHeight);
+        if (this.layersReady) {
+            this.drawLayeredPaintedSkin(ctx, now, seconds, still, naturalWidth, naturalHeight, drawWidth, drawHeight);
+        } else {
+            ctx.drawImage(this.skinImage, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+            this.drawClosedEyesOverlay(ctx, now, naturalWidth, drawWidth, drawHeight);
+        }
         ctx.restore();
 
         this.drawAquaticBubbles(ctx, seconds, still);
         this.drawPaintedAccents(ctx, seconds, still);
+    }
+
+    layerPoint(pivot, naturalWidth, naturalHeight, drawWidth, drawHeight) {
+        return {
+            x: -drawWidth / 2 + pivot.x / naturalWidth * drawWidth,
+            y: -drawHeight + pivot.y / naturalHeight * drawHeight,
+        };
+    }
+
+    drawRotatedLayer(ctx, image, pivot, angle, naturalWidth, naturalHeight, drawWidth, drawHeight) {
+        const point = this.layerPoint(pivot, naturalWidth, naturalHeight, drawWidth, drawHeight);
+        ctx.save();
+        ctx.translate(point.x, point.y);
+        ctx.rotate(angle);
+        ctx.translate(-point.x, -point.y);
+        ctx.drawImage(image, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+        ctx.restore();
+    }
+
+    layerAngles(seconds, still) {
+        if (still) {
+            return { tail: 0, earLeft: 0, earRight: 0 };
+        }
+
+        let tailSpeed = 1.6;
+        let tailAmplitude = 0.08;
+        let earAmplitude = 0.022;
+        let earBiasLeft = 0;
+        let earBiasRight = 0;
+
+        switch (this.state) {
+            case PET_STATES.HAPPY:
+                tailSpeed = 5;
+                tailAmplitude = 0.2;
+                earAmplitude = 0.045;
+                break;
+            case PET_STATES.PETTING:
+                tailSpeed = 2.2;
+                tailAmplitude = 0.14;
+                earAmplitude = 0.034;
+                earBiasLeft = 0.018;
+                earBiasRight = -0.018;
+                break;
+            case PET_STATES.SLEEPING:
+                tailSpeed = 0.7;
+                tailAmplitude = 0.015;
+                earAmplitude = 0.006;
+                break;
+            case PET_STATES.LISTENING:
+                tailSpeed = 2.2;
+                tailAmplitude = 0.05;
+                earAmplitude = 0.026;
+                earBiasLeft = -0.038;
+                earBiasRight = 0.038;
+                break;
+            case PET_STATES.THINKING:
+                tailSpeed = 1.2;
+                tailAmplitude = 0.035;
+                earAmplitude = 0.014;
+                break;
+            case PET_STATES.CONFUSED:
+                tailSpeed = 1;
+                tailAmplitude = 0.025;
+                earAmplitude = 0.012;
+                earBiasLeft = 0.075;
+                earBiasRight = 0.012;
+                break;
+            case PET_STATES.WAVE:
+                tailSpeed = 4.5;
+                tailAmplitude = 0.16;
+                earAmplitude = 0.04;
+                break;
+            default:
+                break;
+        }
+
+        const earWave = Math.sin(seconds * 2.4);
+        return {
+            tail: Math.sin(seconds * tailSpeed) * tailAmplitude,
+            earLeft: earBiasLeft + earWave * earAmplitude,
+            earRight: earBiasRight - earWave * earAmplitude,
+        };
+    }
+
+    drawLayeredPaintedSkin(ctx, now, seconds, still, naturalWidth, naturalHeight, drawWidth, drawHeight) {
+        const angles = this.layerAngles(seconds, still);
+        const layers = this.layerImages;
+
+        this.drawRotatedLayer(ctx, layers.tail, LAYER_PIVOTS.tail, angles.tail,
+            naturalWidth, naturalHeight, drawWidth, drawHeight);
+        ctx.drawImage(layers.bodyOpen, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+        this.drawRotatedLayer(ctx, layers.earLeft, LAYER_PIVOTS.earLeft, angles.earLeft,
+            naturalWidth, naturalHeight, drawWidth, drawHeight);
+        this.drawRotatedLayer(ctx, layers.earRight, LAYER_PIVOTS.earRight, angles.earRight,
+            naturalWidth, naturalHeight, drawWidth, drawHeight);
+
+        const blink = this.blinkAmount(now);
+        if (blink > 0.01) {
+            ctx.save();
+            ctx.globalAlpha *= Math.min(1, blink * 1.35);
+            ctx.drawImage(layers.bodyClosed, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+            ctx.restore();
+        }
     }
 
     blinkAmount(now) {

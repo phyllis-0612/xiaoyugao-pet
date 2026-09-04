@@ -10,7 +10,8 @@
 - 嘴边持续生成动态泡泡：上浮、摇摆、缩放并淡出
 - 自动响应 SillyTavern 的发送、思考、流式回复完成、停止和切换聊天事件
 - 尾巴与双侧耳鳍采用同画布透明分层及锚点旋转，不使用易漂移的逐帧生图
-- 尾巴按状态改变摆动频率和幅度；耳鳍会倾听竖起、迷糊耷下和待机轻颤
+- 尾巴按状态小幅柔和摆动，尾根使用固定遮盖避免分层裂缝；耳鳍会倾听竖起、迷糊耷下和待机轻颤
+- 待机 12 秒后会舒服地趴下；睡觉时闭眼趴卧，并随呼吸轻轻起伏
 - 八种状态：`idle`、`listening`、`thinking`、`happy`、`confused`、`petting`、`sleeping`、`wave`
 - 设置面板可调整显示、大小、透明度、气泡和减少动态效果
 - 适配 iPhone 安全视口、触摸拖动和屏幕旋转
@@ -52,6 +53,8 @@ window.dispatchEvent(new CustomEvent('xiaoyugao:react', {
 - `pet-renderer.js`：透明皮肤播放器、动作和动态泡泡
 - `assets/xiaoyugao-base-v1.png`：睁眼透明主皮肤
 - `assets/xiaoyugao-closed-eyes-v1.png`：闭眼透明皮肤
+- `assets/xiaoyugao-lying-open-v1.webp`：趴卧睁眼备用皮肤
+- `assets/xiaoyugao-lying-closed-v1.webp`：趴卧睡觉皮肤
 - `preview.html`：独立动作预览页
 
 ## 性能与隐私

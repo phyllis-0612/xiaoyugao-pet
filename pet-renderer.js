@@ -21,6 +21,8 @@ const LAYER_URLS = Object.freeze({
     tail: new URL('./assets/xiaoyugao-tail-v1.png', import.meta.url).href,
     earLeft: new URL('./assets/xiaoyugao-ear-left-v1.png', import.meta.url).href,
     earRight: new URL('./assets/xiaoyugao-ear-right-v1.png', import.meta.url).href,
+    lyingOpen: new URL('./assets/xiaoyugao-lying-open-v1.webp', import.meta.url).href,
+    lyingClosed: new URL('./assets/xiaoyugao-lying-closed-v1.webp', import.meta.url).href,
 });
 const LAYER_PIVOTS = Object.freeze({
     tail: { x: 820, y: 1034 },
@@ -444,7 +446,9 @@ export class XiaoyugaoRenderer {
         }
 
         let tailSpeed = 1.6;
-        let tailAmplitude = 0.08;
+        // The painted tail is intentionally restrained: large rigid rotations
+        // expose the cut edge beneath the hip and make the tail look detached.
+        let tailAmplitude = 0.032;
         let earAmplitude = 0.022;
         let earBiasLeft = 0;
         let earBiasRight = 0;
@@ -452,12 +456,12 @@ export class XiaoyugaoRenderer {
         switch (this.state) {
             case PET_STATES.HAPPY:
                 tailSpeed = 5;
-                tailAmplitude = 0.2;
+                tailAmplitude = 0.065;
                 earAmplitude = 0.045;
                 break;
             case PET_STATES.PETTING:
                 tailSpeed = 2.2;
-                tailAmplitude = 0.14;
+                tailAmplitude = 0.05;
                 earAmplitude = 0.034;
                 earBiasLeft = 0.018;
                 earBiasRight = -0.018;
@@ -469,26 +473,26 @@ export class XiaoyugaoRenderer {
                 break;
             case PET_STATES.LISTENING:
                 tailSpeed = 2.2;
-                tailAmplitude = 0.05;
+                tailAmplitude = 0.025;
                 earAmplitude = 0.026;
                 earBiasLeft = -0.038;
                 earBiasRight = 0.038;
                 break;
             case PET_STATES.THINKING:
                 tailSpeed = 1.2;
-                tailAmplitude = 0.035;
+                tailAmplitude = 0.022;
                 earAmplitude = 0.014;
                 break;
             case PET_STATES.CONFUSED:
                 tailSpeed = 1;
-                tailAmplitude = 0.025;
+                tailAmplitude = 0.018;
                 earAmplitude = 0.012;
                 earBiasLeft = 0.075;
                 earBiasRight = 0.012;
                 break;
             case PET_STATES.WAVE:
                 tailSpeed = 4.5;
-                tailAmplitude = 0.16;
+                tailAmplitude = 0.06;
                 earAmplitude = 0.04;
                 break;
             default:
@@ -507,8 +511,28 @@ export class XiaoyugaoRenderer {
         const angles = this.layerAngles(seconds, still);
         const layers = this.layerImages;
 
+        const relaxedIdle = this.state === PET_STATES.IDLE && seconds >= 12;
+        if (this.state === PET_STATES.SLEEPING || relaxedIdle) {
+            const breath = still ? 0 : Math.sin(seconds * 1.7) * 0.004;
+            ctx.save();
+            ctx.scale(1 - breath * 0.35, 1 + breath);
+            const pose = this.state === PET_STATES.SLEEPING ? layers.lyingClosed : layers.lyingOpen;
+            ctx.drawImage(pose, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+            ctx.restore();
+            return;
+        }
+
         this.drawRotatedLayer(ctx, layers.tail, LAYER_PIVOTS.tail, angles.tail,
             naturalWidth, naturalHeight, drawWidth, drawHeight);
+        // Repaint a small, stationary root bridge before the body. The tip can
+        // sway while the fur-covered attachment point remains visually sealed.
+        const root = this.layerPoint(LAYER_PIVOTS.tail, naturalWidth, naturalHeight, drawWidth, drawHeight);
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(root.x, root.y, drawWidth * 0.052, drawHeight * 0.07, 0, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(layers.tail, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
+        ctx.restore();
         ctx.drawImage(layers.bodyOpen, -drawWidth / 2, -drawHeight, drawWidth, drawHeight);
         this.drawRotatedLayer(ctx, layers.earLeft, LAYER_PIVOTS.earLeft, angles.earLeft,
             naturalWidth, naturalHeight, drawWidth, drawHeight);

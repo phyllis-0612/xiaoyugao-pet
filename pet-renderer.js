@@ -300,7 +300,6 @@ export class XiaoyugaoRenderer {
         ctx.rotate(confusedTilt + listeningTilt);
         ctx.translate(-250, -270);
 
-        this.drawShadow(ctx, bodyY);
         this.drawTail(ctx, seconds, still);
 
         // Xiaoyugao is fluffy, not round: keep a light cat-fox silhouette while the
@@ -394,11 +393,6 @@ export class XiaoyugaoRenderer {
         }
 
         offsetY -= streamPulse * 2.2;
-
-        ctx.save();
-        ctx.globalAlpha = 0.13;
-        ellipse(ctx, 251, 469, 139, 13, '#1d2832');
-        ctx.restore();
 
         const naturalWidth = this.skinImage.naturalWidth || this.skinImage.width;
         const naturalHeight = this.skinImage.naturalHeight || this.skinImage.height;
@@ -691,13 +685,6 @@ export class XiaoyugaoRenderer {
             drawHeart(ctx, 416, 139, 20, '#e6a477', 0.18);
             ctx.restore();
         }
-    }
-
-    drawShadow(ctx, bodyY) {
-        ctx.save();
-        ctx.globalAlpha = 0.2;
-        ellipse(ctx, 247, 449 - bodyY * 0.2, 128, 21, '#26313a');
-        ctx.restore();
     }
 
     drawTail(ctx, seconds, still) {

@@ -69,7 +69,9 @@ body:has(#xiaoyugao-pet-root.is-dragging) {
     z-index: 2;
     left: 50%;
     top: 13%;
-    max-width: min(180px, 72vw);
+    box-sizing: border-box;
+    width: max-content;
+    max-width: min(260px, calc(100vw - 32px));
     padding: 7px 11px;
     border: 1px solid rgba(130, 142, 154, 0.34);
     border-radius: 14px 14px 14px 5px;
@@ -80,10 +82,11 @@ body:has(#xiaoyugao-pet-root.is-dragging) {
     font: 600 12px/1.35 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     letter-spacing: 0.01em;
     text-align: center;
-    white-space: nowrap;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     opacity: 0;
     pointer-events: none;
-    transform: translate(-50%, -118%) scale(0.88);
+    transform: scale(0.98);
     transform-origin: 25% 100%;
     transition: opacity 150ms ease, transform 170ms cubic-bezier(0.2, 0.75, 0.25, 1.2);
 }
@@ -91,7 +94,7 @@ body:has(#xiaoyugao-pet-root.is-dragging) {
 .xiaoyugao-speech::after {
     content: "";
     position: absolute;
-    left: 19px;
+    left: var(--xiaoyugao-tail-x, 19px);
     bottom: -6px;
     width: 11px;
     height: 11px;
@@ -103,7 +106,7 @@ body:has(#xiaoyugao-pet-root.is-dragging) {
 
 .xiaoyugao-speech.is-visible {
     opacity: 1;
-    transform: translate(-50%, -118%) scale(1);
+    transform: scale(1);
 }
 
 .xiaoyugao-drag-hint {
@@ -221,7 +224,8 @@ body:has(#xiaoyugao-pet-root.is-dragging) {
     writing-mode: horizontal-tb !important;
 }
 
-#xiaoyugao-settings #xiaoyugao-reset-position {
+#xiaoyugao-settings #xiaoyugao-reset-position,
+#xiaoyugao-settings #xiaoyugao-preview-swim {
     display: inline-flex !important;
     width: auto !important;
     min-width: max-content !important;
@@ -264,4 +268,29 @@ body:has(#xiaoyugao-pet-root.is-dragging) {
     .xiaoyugao-drag-hint {
         transition: none;
     }
+}
+
+.xiaoyugao-companion-settings { margin: 14px 0; }
+.xiaoyugao-companion-settings summary { cursor: pointer; font-weight: 600; }
+.xiaoyugao-companion-settings label { display: block; margin-top: 10px; }
+.xiaoyugao-companion-settings textarea, .xiaoyugao-companion-settings select { width: 100%; box-sizing: border-box; }
+.xiaoyugao-companion-settings small, .xiaoyugao-count-note { font-size: 12px; line-height: 1.6; opacity: .85; }
+
+.xiaoyugao-speech[data-placement="below"]::after {
+    top: -6px;
+    bottom: auto;
+    transform: rotate(225deg);
+}
+.xiaoyugao-speech[data-placement="left"]::after {
+    left: auto;
+    right: -6px;
+    top: var(--xiaoyugao-tail-y, 12px);
+    bottom: auto;
+    transform: rotate(-45deg);
+}
+.xiaoyugao-speech[data-placement="right"]::after {
+    left: -6px;
+    top: var(--xiaoyugao-tail-y, 12px);
+    bottom: auto;
+    transform: rotate(135deg);
 }

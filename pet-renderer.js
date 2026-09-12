@@ -5,9 +5,18 @@ export const PET_STATES = Object.freeze({
     HAPPY: 'happy',
     CONFUSED: 'confused',
     PETTING: 'petting',
+    NUZZLING: 'nuzzling',
     SLEEPING: 'sleeping',
     WAVE: 'wave',
 });
+
+export const NUZZLE_DURATION_MS = 3600;
+export const WAVE_DURATION_MS = 1800;
+
+export function getSwimStrideLength(displaySize = 172) {
+    const size = Number(displaySize);
+    return Math.max(24, (Number.isFinite(size) ? size : 172) * 0.28);
+}
 
 const DESIGN_SIZE = 500;
 // The pet is at most 303 CSS px wide. A 750 px backing store remains crisp at
@@ -83,6 +92,10 @@ export class XiaoyugaoRenderer {
         this.ctx = canvas.getContext('2d', { alpha: true });
         this.state = PET_STATES.IDLE;
         this.stateStartedAt = performance.now();
+        this.form = 'sitting';
+        this.formStartedAt = this.stateStartedAt;
+        this.swimDirection = 1;
+        this.swimPhase = 0;
         this.reducedMotion = false;
         this.settingsPreviewMode = false;
         this.running = false;
@@ -190,6 +203,30 @@ export class XiaoyugaoRenderer {
         this.draw(performance.now());
     }
 
+    setForm(nextForm) {
+        if (!['sitting', 'lying', 'swimming'].includes(nextForm) || this.form === nextForm) {
+            return;
+        }
+
+        this.form = nextForm;
+        this.formStartedAt = performance.now();
+        this.draw(performance.now());
+    }
+
+    currentForm() {
+        return this.state === PET_STATES.SLEEPING ? 'lying' : this.form;
+    }
+
+    setSwimDirection(direction) {
+        this.swimDirection = Math.sign(Number(direction)) || 1;
+        this.draw(performance.now());
+    }
+
+    setSwimProgress(distance, strideLength = 1) {
+        const stride = Math.max(0.0001, Math.abs(Number(strideLength)) || 1);
+        this.swimPhase = ((Number(distance) || 0) / stride) % 1;
+    }
+
     setReducedMotion(enabled) {
         this.reducedMotion = Boolean(enabled);
         this.draw(performance.now());
@@ -285,7 +322,7 @@ export class XiaoyugaoRenderer {
         const still = this.reducedMotion;
         const sleeping = this.state === PET_STATES.SLEEPING;
         const breathing = still ? 0 : Math.sin(seconds * (sleeping ? 1.8 : 2.7)) * (sleeping ? 3.2 : 1.4);
-        const celebratoryBounce = !still && [PET_STATES.HAPPY, PET_STATES.PETTING].includes(this.state)
+        const celebratoryBounce = !still && [PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.NUZZLING].includes(this.state)
             ? -Math.abs(Math.sin(seconds * 5.2)) * 5
             : 0;
         const streamingPulse = !still && now < this.pulseUntil
@@ -293,11 +330,12 @@ export class XiaoyugaoRenderer {
             : 0;
         const confusedTilt = this.state === PET_STATES.CONFUSED ? -0.075 : 0;
         const listeningTilt = this.state === PET_STATES.LISTENING ? 0.035 : 0;
-        const bodyY = breathing + celebratoryBounce - streamingPulse;
+        const swimWave = this.form === 'swimming' && !still ? Math.sin(this.swimPhase * Math.PI * 2) : 0;
+        const bodyY = breathing + celebratoryBounce - streamingPulse + Math.abs(swimWave) * 3;
 
         ctx.save();
         ctx.translate(250, 270 + bodyY);
-        ctx.rotate(confusedTilt + listeningTilt);
+        ctx.rotate(confusedTilt + listeningTilt + (this.form === 'swimming' ? this.swimDirection * 0.018 + swimWave * 0.008 : 0));
         ctx.translate(-250, -270);
 
         this.drawTail(ctx, seconds, still);
@@ -371,6 +409,18 @@ export class XiaoyugaoRenderer {
                 scaleX = still ? 1.012 : 1.012 + Math.abs(quickWave) * 0.008;
                 scaleY = still ? 0.992 : 0.992 - Math.abs(quickWave) * 0.006;
                 break;
+            case PET_STATES.NUZZLING: {
+                const progress = Math.min(1, Math.max(0, (now - this.stateStartedAt) / NUZZLE_DURATION_MS));
+                const arrive = Math.sin(Math.min(1, progress * 2) * Math.PI / 2);
+                const leave = progress > 0.72 ? 1 - (progress - 0.72) / 0.28 : 1;
+                const closeness = still ? 0.82 : Math.max(0, arrive * leave);
+                offsetX = -8 * closeness + (still ? 0 : Math.sin(progress * Math.PI * 5) * 2.2 * closeness);
+                offsetY = 4 * closeness;
+                rotation = -0.045 * closeness;
+                scaleX = 1 + 0.018 * closeness;
+                scaleY = 1 - 0.01 * closeness;
+                break;
+            }
             case PET_STATES.SLEEPING:
                 offsetY = 5;
                 rotation = -0.012;
@@ -390,6 +440,14 @@ export class XiaoyugaoRenderer {
                 scaleY = 1 + breath * 0.0045;
                 break;
             }
+        }
+
+        if (this.form === 'swimming') {
+            const swimWave = still ? 0 : Math.sin(this.swimPhase * Math.PI * 2);
+            offsetY += Math.abs(swimWave) * 3;
+            rotation += this.swimDirection * 0.016 + swimWave * 0.009;
+            scaleX *= 1 + Math.abs(swimWave) * 0.004;
+            scaleY *= 1 - Math.abs(swimWave) * 0.003;
         }
 
         offsetY -= streamPulse * 2.2;
@@ -460,6 +518,13 @@ export class XiaoyugaoRenderer {
                 earBiasLeft = 0.018;
                 earBiasRight = -0.018;
                 break;
+            case PET_STATES.NUZZLING:
+                tailSpeed = 2.8;
+                tailAmplitude = 0.058;
+                earAmplitude = 0.026;
+                earBiasLeft = 0.022;
+                earBiasRight = -0.022;
+                break;
             case PET_STATES.SLEEPING:
                 tailSpeed = 0.7;
                 tailAmplitude = 0.015;
@@ -493,6 +558,12 @@ export class XiaoyugaoRenderer {
                 break;
         }
 
+        if (this.form === 'swimming') {
+            tailSpeed = 5.4;
+            tailAmplitude = 0.068;
+            earAmplitude = 0.03;
+        }
+
         const earWave = Math.sin(seconds * 2.4);
         return {
             tail: Math.sin(seconds * tailSpeed) * tailAmplitude,
@@ -505,8 +576,8 @@ export class XiaoyugaoRenderer {
         const angles = this.layerAngles(seconds, still);
         const layers = this.layerImages;
 
-        const relaxedIdle = this.state === PET_STATES.IDLE && seconds >= 12;
-        if (this.state === PET_STATES.SLEEPING || relaxedIdle) {
+        const lying = this.state === PET_STATES.SLEEPING || this.form === 'lying';
+        if (lying) {
             const breath = still ? 0 : Math.sin(seconds * 1.7) * 0.004;
             ctx.save();
             ctx.scale(1 - breath * 0.35, 1 + breath);
@@ -543,7 +614,7 @@ export class XiaoyugaoRenderer {
     }
 
     blinkAmount(now) {
-        if ([PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.SLEEPING].includes(this.state)) {
+        if ([PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.NUZZLING, PET_STATES.SLEEPING].includes(this.state)) {
             return 1;
         }
 
@@ -576,7 +647,7 @@ export class XiaoyugaoRenderer {
     drawAquaticBubbles(ctx, seconds, still) {
         // 小鱼糕每次呼噜都会吐出一串小泡泡。泡泡由 Canvas 实时绘制，
         // 因此不会随着皮肤一起僵在原地。
-        const speed = this.state === PET_STATES.HAPPY ? 0.38 : 0.24;
+        const speed = this.state === PET_STATES.HAPPY || this.form === 'swimming' ? 0.38 : 0.24;
         const count = this.reducedMotion ? 2 : 5;
         ctx.save();
         for (let index = 0; index < count; index += 1) {
@@ -659,7 +730,7 @@ export class XiaoyugaoRenderer {
             ctx.restore();
         }
 
-        if (this.state === PET_STATES.PETTING) {
+        if ([PET_STATES.PETTING, PET_STATES.NUZZLING].includes(this.state)) {
             const rise = still ? 0 : (seconds * 20) % 16;
             drawHeart(ctx, 79, 151 - rise * 0.22, 24, '#e99aa1', -0.2);
             drawHeart(ctx, 408, 119 - rise * 0.35, 30, '#e5aa73', 0.18);
@@ -688,7 +759,8 @@ export class XiaoyugaoRenderer {
     }
 
     drawTail(ctx, seconds, still) {
-        const active = [PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.WAVE].includes(this.state);
+        const active = [PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.NUZZLING, PET_STATES.WAVE].includes(this.state)
+            || this.form === 'swimming';
         const amplitude = active ? 15 : 6;
         const wag = still ? 0 : Math.sin(seconds * (active ? 4.4 : 2.2)) * amplitude;
 
@@ -960,7 +1032,7 @@ export class XiaoyugaoRenderer {
         }
         ctx.restore();
 
-        if ([PET_STATES.HAPPY, PET_STATES.PETTING].includes(this.state)) {
+        if ([PET_STATES.HAPPY, PET_STATES.PETTING, PET_STATES.NUZZLING].includes(this.state)) {
             ctx.save();
             ctx.globalAlpha = 0.36;
             ellipse(ctx, 186, 229, 22, 11, '#ef9da4');
@@ -991,7 +1063,7 @@ export class XiaoyugaoRenderer {
             ctx.restore();
         }
 
-        if (this.state === PET_STATES.PETTING) {
+        if ([PET_STATES.PETTING, PET_STATES.NUZZLING].includes(this.state)) {
             const float = still ? 0 : (seconds * 24) % 18;
             drawHeart(ctx, 151, 131 - float * 0.2, 24, '#e99aa1', -0.2);
             drawHeart(ctx, 355, 113 - float * 0.35, 31, '#e5aa73', 0.18);

@@ -1,17 +1,38 @@
-import { XiaoyugaoRenderer, PET_STATES } from './pet-renderer.js';
+import { XiaoyugaoRenderer, PET_STATES, getSwimStrideLength, NUZZLE_DURATION_MS, WAVE_DURATION_MS } from './pet-renderer.js';
+
+import { Companion, SCENES, sceneLines, currentCard, migrateCompanionSettings } from './companion.js';
 
 const MODULE_NAME = 'xiaoyugao_pet';
 const DEFAULT_EXTENSION_NAME = 'third-party/xiaoyugao-pet';
 const POSITION_MARGIN = 10;
 const DRAG_THRESHOLD = 7;
-const HIT_ALPHA = 40;
-const HIT_RADIUS_TOUCH = 14;
+// Fur tips are soft; only clearly painted pixels count as Xiaoyugao, and the
+// touch forgiveness ring is kept small so buttons beside her stay tappable.
+const HIT_ALPHA = 72;
+const HIT_RADIUS_TOUCH = 8;
 const HIT_RADIUS_MOUSE = 3;
-const CLICK_GUARD_DURATION = 900;
-const CLICK_GUARD_RADIUS = 36;
-const GENERATION_SETTLE_DELAY = 520;
-const SEND_BUTTON_SELECTOR = '#send_but';
-const STOP_BUTTON_SELECTOR = '#mes_stop';
+// Only swallow the browser's own synthetic click that follows a tap on
+// Xiaoyugao; it lands within a few hundred ms at the same spot.
+const CLICK_GUARD_DURATION = 450;
+const CLICK_GUARD_RADIUS = 24;
+// A press that never receives pointerup/pointercancel (app switch, system
+// gesture) must not leave the page's touches blocked forever.
+const STALE_PRESS_TIMEOUT = 15000;
+const DOUBLE_TAP_WINDOW = 320;
+const DOUBLE_TAP_RADIUS = 42;
+const LONG_PRESS_DURATION = 600;
+const REPORT_BUBBLE_DURATION = 5000;
+const AMBIENT_BUBBLE_INTERVAL = 10000;
+const TYPING_IDLE_DELAY = 3000;
+const THINKING_COMPANION_DELAY = 20000;
+const AUTO_LIE_DELAY = 12000;
+const AUTO_SWIM_MIN_DELAY = 42000;
+const AUTO_SWIM_JITTER = 36000;
+const SWIM_MIN_DISTANCE = 52;
+const SWIM_MAX_DISTANCE = 92;
+const SWIM_DURATION = 3200;
+// Reasoning models can sit silent for minutes. Streaming tokens re-arm this.
+const GENERATION_WATCHDOG_DELAY = 300000;
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -19,6 +40,10 @@ const DEFAULT_SETTINGS = Object.freeze({
     opacity: 100,
     reducedMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,
     showBubble: true,
+    autoSwim: true,
+    customBubbles: {},
+    cardBubbles: {},
+    companionMode: 'daily',
     position: {
         x: 0.82,
         y: 0.68,
@@ -32,58 +57,52 @@ const stateLabels = Object.freeze({
     [PET_STATES.HAPPY]: '小鱼糕很开心',
     [PET_STATES.CONFUSED]: '小鱼糕有点迷糊',
     [PET_STATES.PETTING]: '小鱼糕被摸摸了',
+    [PET_STATES.NUZZLING]: '小鱼糕在蹭蹭你',
     [PET_STATES.SLEEPING]: '小鱼糕睡着了',
-    [PET_STATES.WAVE]: '小鱼糕在挥爪',
+    [PET_STATES.WAVE]: '小鱼糕在挥爪打招呼',
 });
-
-const PET_LINES = Object.freeze({
-    hello: ['鱼仔妈妈，我来啦～', '妈妈回来啦！贴贴～', '小鱼糕游进小窝啦～'],
-    idle: ['陪妈妈待一会儿～', '小鱼糕在这里呀', '窝在妈妈旁边～'],
-    listening: ['妈妈说，小鱼糕听着呢', '嗯嗯，鱼糕听见啦～', '悄悄话也可以告诉我哦'],
-    thinking: ['奶盖宝宝正在想哦…', '捞一捞灵感泡泡…', '小鱼糕帮妈妈想想…'],
-    happy: ['回信游回来啦！', '好耶，奶盖宝宝回话啦！', '捞到回信啦～'],
-    confused: ['咦，泡泡走丢了吗？', '小鱼糕有点迷糊…', '奶盖宝宝卡住了吗？'],
-    petting: ['妈妈再摸摸～', '呼噜……最爱妈妈啦', '贴贴鱼仔妈妈～'],
-    sleeping: ['挤在妈妈和奶盖中间睡…', '小鱼糕困嘟嘟…', '梦里也要冒泡泡～'],
-    wave: ['小鱼糕也跟来啦！', '换个小窝继续陪妈妈～', '妈妈去哪我去哪～'],
-    dragging: ['妈妈要把我抱去哪呀？', '小鱼糕被妈妈抱起来啦～'],
-    placed: ['这里离妈妈近～', '就在这里陪妈妈！'],
-    stopped: ['奶盖宝宝先歇一会儿？', '停下来陪妈妈啦～'],
-});
-
-function petLine(group) {
-    const lines = PET_LINES[group] ?? ['小鱼糕在这里呀'];
-    return lines[Math.floor(Math.random() * lines.length)];
-}
 
 let context;
 let coreApi;
 let settings;
+let companion;
+let reportUntil = 0;
+let nextAmbientBubbleAt = 0;
+let refreshBubbleEditor;
 let renderer;
 let ui;
 let initializePromise;
 let reactionTimer;
 let bubbleTimer;
+let bubbleFollowTimer;
 let positionFrame;
 let hoverFrame;
 let bootTimer;
 let settingsLayerFrame;
 let settingsLayerTimer;
 let generationWatchdog;
-let generationFinishTimer;
-let chatActivityFrame;
-let chatObserver;
-let generationControlFrame;
-let generationControlObserver;
-let generationControlActive = false;
-let generationWasManuallyStopped = false;
-let observedChatLength = 0;
+let generationEndTimer;
+let replyArrived = false;
+let awaitingLateReply = false;
+let currentGenerationType = '';
 let lastSignalStatus = '待命，等你发消息';
 let currentPriority = 0;
 let priorityUntil = 0;
 let isGenerating = false;
 let publicApi;
 let clickGuard;
+let longPressTimer;
+let stalePressTimer;
+let pendingTap;
+let typingIdleTimer;
+let typingAttentionActive = false;
+let thinkingBubble20Timer;
+let thinkingBubble40Timer;
+let thinkingCompanionMessage = '奶盖宝宝正在想哦…';
+let poseTimer;
+let roamTimer;
+let roamFrame;
+let roamRun;
 
 const cleanups = [];
 
@@ -111,6 +130,7 @@ const drag = {
     startY: 0,
     startLeft: 0,
     startTop: 0,
+    longPress: false,
 };
 
 function cloneDefaults() {
@@ -156,16 +176,22 @@ function getSettings() {
         }
     }
 
+    if (!stored.customBubbles || typeof stored.customBubbles !== 'object' || Array.isArray(stored.customBubbles)) stored.customBubbles = {};
+
+    const needsCompanionMigration = !stored.floorCopyMigrated;
+    migrateCompanionSettings(stored);
+
     stored.position = {
         ...DEFAULT_SETTINGS.position,
         ...(stored.position ?? {}),
     };
 
-    stored.scale = clamp(finiteNumber(stored.scale, DEFAULT_SETTINGS.scale), 70, 150);
+    stored.scale = clamp(finiteNumber(stored.scale, DEFAULT_SETTINGS.scale), 40, 150);
     stored.opacity = clamp(finiteNumber(stored.opacity, DEFAULT_SETTINGS.opacity), 40, 100);
     stored.position.x = clamp(finiteNumber(stored.position.x, DEFAULT_SETTINGS.position.x), 0, 1);
     stored.position.y = clamp(finiteNumber(stored.position.y, DEFAULT_SETTINGS.position.y), 0, 1);
 
+    if (needsCompanionMigration) saveSettings();
     return stored;
 }
 
@@ -186,7 +212,7 @@ function createPetUi() {
     root.innerHTML = `
         <div class="xiaoyugao-speech" aria-live="polite"></div>
         <canvas class="xiaoyugao-canvas" width="500" height="500" aria-hidden="true"></canvas>
-        <span class="xiaoyugao-drag-hint" aria-hidden="true">拖动我 · 点我摸摸</span>
+        <span class="xiaoyugao-drag-hint" aria-hidden="true">拖动 · 点摸摸 · 长按报数</span>
     `;
 
     document.body.append(root);
@@ -203,10 +229,47 @@ function createPetUi() {
     on(document, 'pointermove', handlePointerMove, { capture: true, passive: false });
     on(document, 'pointerup', handlePointerUp, { capture: true });
     on(document, 'pointercancel', handlePointerCancel, { capture: true });
+    on(document, 'touchend', handleTouchEndBackstop, { capture: true, passive: true });
+    on(document, 'touchcancel', handleTouchEndBackstop, { capture: true, passive: true });
+    on(window, 'blur', abandonPointerInteraction);
+    on(document, 'visibilitychange', () => {
+        if (document.hidden) {
+            abandonPointerInteraction();
+        }
+    });
+    on(document, 'contextmenu', handleContextMenuGuard, { capture: true });
     on(document, 'pointermove', handleHoverHint, { passive: true });
+    on(document, 'input', handleTypingInput, { capture: true, passive: true });
     on(root, 'keydown', handlePetKeydown);
 
     return { root, canvas, bubble, hint };
+}
+
+/**
+ * Xiaoyugao's root is pointer-events: none, so the browser never reports her as
+ * the element under a point. Switch that on for one synchronous hit test to
+ * learn whether anything (a drawer, a popup, a settings panel) is stacked
+ * above her there. If it is, the tap belongs to that element, not to her.
+ */
+function xiaoyugaoIsTopmostAt(clientX, clientY) {
+    if (typeof document.elementFromPoint !== 'function') {
+        return true;
+    }
+
+    const root = ui.root;
+    const previous = root.style.pointerEvents;
+    root.style.pointerEvents = 'auto';
+    let topmost;
+    try {
+        topmost = document.elementFromPoint(clientX, clientY);
+    } catch {
+        topmost = null;
+    } finally {
+        root.style.pointerEvents = previous;
+    }
+
+    // Outside the viewport (or hit-testing unavailable): fall back to pixels.
+    return !topmost || topmost === root || root.contains(topmost);
 }
 
 function hitsXiaoyugao(clientX, clientY, pointerType = 'mouse') {
@@ -222,6 +285,10 @@ function hitsXiaoyugao(clientX, clientY, pointerType = 'mouse') {
         || clientY > rect.bottom
         || rect.width <= 0
     ) {
+        return false;
+    }
+
+    if (!xiaoyugaoIsTopmostAt(clientX, clientY)) {
         return false;
     }
 
@@ -257,6 +324,30 @@ function handleTouchStartGuard(event) {
 
     event.stopImmediatePropagation();
     event.preventDefault();
+}
+
+function handleTouchEndBackstop(event) {
+    // Pointer events normally end the press. If the browser dropped that
+    // pointerup, the last finger leaving the screen still releases Xiaoyugao.
+    if (drag.active && event.touches.length === 0) {
+        abandonPointerInteraction();
+    }
+}
+
+function abandonPointerInteraction() {
+    if (!drag.active) {
+        return;
+    }
+
+    const wasDragged = drag.moved;
+    const wasLongPress = drag.longPress;
+    finishPointerInteraction();
+    if (wasDragged) {
+        rememberCurrentPosition();
+    }
+    if (wasDragged || wasLongPress) {
+        returnToAmbient();
+    }
 }
 
 function handleHoverHint(event) {
@@ -373,12 +464,72 @@ function bindSettingsPreviewLayer() {
 }
 
 function bindSettingsControls() {
+    const sceneSelect = document.getElementById('xiaoyugao-bubble-scene');
+    const editor = document.getElementById('xiaoyugao-bubble-lines');
+    if (sceneSelect && editor) {
+        for (const [key, scene] of Object.entries(SCENES)) {
+            const option = document.createElement('option');
+            option.value = key;
+            option.textContent = scene.label;
+            sceneSelect.append(option);
+        }
+        const scope = document.getElementById('xiaoyugao-bubble-scope');
+        const scopeLabel = document.getElementById('xiaoyugao-bubble-scope-label');
+        const reset = document.getElementById('xiaoyugao-bubble-reset');
+        const target = (create = false) => {
+            const card = currentCard(SillyTavern.getContext());
+            if (scope.value !== 'card' || !card) return settings.customBubbles;
+            if (create && !settings.cardBubbles[card.key]) settings.cardBubbles[card.key] = {};
+            return settings.cardBubbles[card.key] ?? {};
+        };
+        refreshBubbleEditor = () => {
+            const card = currentCard(SillyTavern.getContext());
+            scope.options[1].disabled = !card;
+            if (!card) scope.value = 'general';
+            scopeLabel.textContent = card ? `当前角色：${card.name}` : '未选择单人角色卡；群聊使用通用台词。';
+            const specific = scope.value === 'card';
+            editor.value = specific ? target()[sceneSelect.value] ?? '' : sceneLines(settings.customBubbles, sceneSelect.value).join('\n');
+            editor.placeholder = specific ? `留空继承通用台词：\n${sceneLines(settings.customBubbles, sceneSelect.value).join('\n')}` : '写下你想听小鱼糕说的话';
+            reset.textContent = specific ? '恢复此场景通用台词' : '恢复此场景默认';
+        };
+        refreshBubbleEditor();
+        on(sceneSelect, 'change', refreshBubbleEditor);
+        on(scope, 'change', refreshBubbleEditor);
+        on(editor, 'input', () => {
+            target(true)[sceneSelect.value] = editor.value.slice(0, 7500);
+            saveSettings();
+        });
+        on(reset, 'click', () => {
+            delete target()[sceneSelect.value];
+            refreshBubbleEditor();
+            saveSettings();
+        });
+        on(document.getElementById('xiaoyugao-bubble-preview'), 'click', () => {
+            reportUntil = 0;
+            showBubble(companion.say(sceneSelect.value, scope.value === 'card' ? 'current' : 'general'), 5000, true);
+        });
+        on(document.getElementById('xiaoyugao-report'), 'click', showCompanionReport);
+    }
+
+    const mode = document.getElementById('xiaoyugao-companion-mode');
+    if (mode) {
+        mode.value = settings.companionMode;
+        on(mode, 'change', () => {
+            settings.companionMode = mode.value === 'quiet' ? 'quiet' : 'daily';
+            reportUntil = 0;
+            hideBubble();
+            nextAmbientBubbleAt = 0;
+            saveSettings();
+        });
+    }
     const enabled = document.getElementById('xiaoyugao-enabled');
     const scale = document.getElementById('xiaoyugao-scale');
     const opacity = document.getElementById('xiaoyugao-opacity');
     const reducedMotion = document.getElementById('xiaoyugao-reduced-motion');
     const showBubble = document.getElementById('xiaoyugao-show-bubble');
+    const autoSwim = document.getElementById('xiaoyugao-auto-swim');
     const resetPosition = document.getElementById('xiaoyugao-reset-position');
+    const previewSwim = document.getElementById('xiaoyugao-preview-swim');
 
     if (enabled) {
         on(enabled, 'change', (event) => {
@@ -390,7 +541,7 @@ function bindSettingsControls() {
 
     if (scale) {
         on(scale, 'input', (event) => {
-            settings.scale = clamp(Number(event.currentTarget.value), 70, 150);
+            settings.scale = clamp(Number(event.currentTarget.value), 40, 150);
             applyVisualSettings({ reposition: true });
             syncSettingsControls();
             saveSettings();
@@ -410,6 +561,12 @@ function bindSettingsControls() {
         on(reducedMotion, 'change', (event) => {
             settings.reducedMotion = event.currentTarget.checked;
             renderer?.setReducedMotion(settings.reducedMotion);
+            if (settings.reducedMotion) {
+                clearAutoSwimTimer();
+                cancelAutoSwim();
+            } else {
+                scheduleAutoSwim();
+            }
             saveSettings();
         });
     }
@@ -418,9 +575,23 @@ function bindSettingsControls() {
         on(showBubble, 'change', (event) => {
             settings.showBubble = event.currentTarget.checked;
             if (!settings.showBubble) {
+                reportUntil = 0;
                 hideBubble();
             } else if (isGenerating) {
-                showBubble(petLine('thinking'), 0);
+                showBubble('奶盖宝宝正在想哦…', 0);
+            }
+            saveSettings();
+        });
+    }
+
+    if (autoSwim) {
+        on(autoSwim, 'change', (event) => {
+            settings.autoSwim = event.currentTarget.checked;
+            if (settings.autoSwim) {
+                scheduleAutoSwim();
+            } else {
+                clearAutoSwimTimer();
+                cancelAutoSwim();
             }
             saveSettings();
         });
@@ -432,11 +603,18 @@ function bindSettingsControls() {
             applyStoredPosition();
             transitionTo(PET_STATES.WAVE, {
                 duration: 1500,
-                bubble: petLine('hello'),
+                bubble: '小鱼糕游回右下角啦～',
+                manual: true,
                 priority: 30,
                 force: true,
             });
             saveSettings();
+        });
+    }
+
+    if (previewSwim) {
+        on(previewSwim, 'click', () => {
+            startAutoSwim(0, 2700, { announce: true });
         });
     }
 
@@ -448,8 +626,9 @@ function bindSettingsControls() {
             }
 
             transitionTo(state, {
-                duration: state === PET_STATES.SLEEPING ? 3000 : 1800,
+                duration: state === PET_STATES.NUZZLING ? NUZZLE_DURATION_MS : state === PET_STATES.SLEEPING ? 3000 : 1800,
                 bubble: previewBubbleFor(state),
+                manual: true,
                 priority: 35,
                 force: true,
             });
@@ -465,6 +644,7 @@ function syncSettingsControls() {
     const opacityValue = document.getElementById('xiaoyugao-opacity-value');
     const reducedMotion = document.getElementById('xiaoyugao-reduced-motion');
     const showBubble = document.getElementById('xiaoyugao-show-bubble');
+    const autoSwim = document.getElementById('xiaoyugao-auto-swim');
 
     if (enabled) enabled.checked = Boolean(settings.enabled);
     if (scale) scale.value = String(settings.scale);
@@ -473,20 +653,22 @@ function syncSettingsControls() {
     if (opacityValue) opacityValue.textContent = `${settings.opacity}%`;
     if (reducedMotion) reducedMotion.checked = Boolean(settings.reducedMotion);
     if (showBubble) showBubble.checked = Boolean(settings.showBubble);
+    if (autoSwim) autoSwim.checked = Boolean(settings.autoSwim);
 }
 
 function previewBubbleFor(state) {
-    const groups = {
-        [PET_STATES.IDLE]: 'idle',
-        [PET_STATES.LISTENING]: 'listening',
-        [PET_STATES.THINKING]: 'thinking',
-        [PET_STATES.HAPPY]: 'happy',
-        [PET_STATES.CONFUSED]: 'confused',
-        [PET_STATES.PETTING]: 'petting',
-        [PET_STATES.SLEEPING]: 'sleeping',
-        [PET_STATES.WAVE]: 'wave',
+    const bubbles = {
+        [PET_STATES.IDLE]: '陪妈妈待一会儿～',
+        [PET_STATES.LISTENING]: '妈妈说，小鱼糕听着呢',
+        [PET_STATES.THINKING]: '奶盖宝宝正在想哦…',
+        [PET_STATES.HAPPY]: '回信游回来啦！',
+        [PET_STATES.CONFUSED]: '咦，泡泡走丢了吗？',
+        [PET_STATES.PETTING]: '妈妈再摸摸～',
+        [PET_STATES.NUZZLING]: '贴贴妈妈，再蹭一下～',
+        [PET_STATES.SLEEPING]: '小鱼糕困嘟嘟…',
+        [PET_STATES.WAVE]: '妈妈回来啦！贴贴～',
     };
-    return groups[state] ? petLine(groups[state]) : '';
+    return bubbles[state] ?? '';
 }
 
 function applyVisualSettings({ reposition = false } = {}) {
@@ -497,8 +679,16 @@ function applyVisualSettings({ reposition = false } = {}) {
     ui.root.classList.toggle('is-disabled', !settings.enabled);
     if (settings.enabled) {
         renderer?.start();
+        if (renderer?.state === PET_STATES.IDLE) {
+            scheduleAutoLie();
+            scheduleAutoSwim();
+        }
     } else {
+        reportUntil = 0;
         renderer?.stop();
+        clearPoseTimer();
+        cancelAutoSwim({ settle: false });
+        clearAutoSwimTimer();
         hideBubble();
         window.clearTimeout(reactionTimer);
     }
@@ -563,6 +753,7 @@ function setPixelPosition(left, top) {
     const bounds = movementBounds();
     ui.root.style.left = `${clamp(left, bounds.minimumLeft, bounds.maximumLeft)}px`;
     ui.root.style.top = `${clamp(top, bounds.minimumTop, bounds.maximumTop)}px`;
+    if (ui.bubble.classList.contains('is-visible')) positionBubble();
 }
 
 function applyStoredPosition() {
@@ -606,6 +797,7 @@ function handlePointerDown(event) {
     }
 
     event.stopImmediatePropagation();
+    wakeXiaoyugao();
     const rect = ui.root.getBoundingClientRect();
     drag.active = true;
     drag.moved = false;
@@ -614,7 +806,10 @@ function handlePointerDown(event) {
     drag.startY = event.clientY;
     drag.startLeft = rect.left;
     drag.startTop = rect.top;
+    drag.longPress = false;
     ui.root.classList.add('is-pressed');
+    scheduleLongPress();
+    armStalePressTimer();
     armClickGuard(event);
     event.preventDefault();
 }
@@ -628,9 +823,11 @@ function handlePointerMove(event) {
     const deltaY = event.clientY - drag.startY;
     if (!drag.moved && Math.hypot(deltaX, deltaY) >= DRAG_THRESHOLD) {
         drag.moved = true;
+        clearLongPressTimer();
         ui.root.classList.add('is-dragging');
         transitionTo(PET_STATES.LISTENING, {
-            bubble: petLine('dragging'),
+            bubble: '妈妈要把我抱去哪呀？',
+            manual: true,
             priority: 45,
             force: true,
         });
@@ -639,6 +836,7 @@ function handlePointerMove(event) {
     if (drag.moved) {
         setPixelPosition(drag.startLeft + deltaX, drag.startTop + deltaY);
     }
+    armStalePressTimer();
 
     event.stopImmediatePropagation();
     event.preventDefault();
@@ -653,18 +851,24 @@ function handlePointerUp(event) {
     event.preventDefault();
     armClickGuard(event);
     const wasDragged = drag.moved;
+    const wasLongPress = drag.longPress;
+    const tapX = event.clientX;
+    const tapY = event.clientY;
     finishPointerInteraction();
 
     if (wasDragged) {
         rememberCurrentPosition();
         transitionTo(PET_STATES.WAVE, {
             duration: 1100,
-            bubble: petLine('placed'),
+            bubble: '这里离妈妈近～',
+            manual: true,
             priority: 35,
             force: true,
         });
+    } else if (wasLongPress) {
+        returnToAmbient();
     } else {
-        petXiaoyugao();
+        registerTap(tapX, tapY);
     }
 }
 
@@ -677,18 +881,151 @@ function handlePointerCancel(event) {
     event.preventDefault();
     armClickGuard(event);
     const wasDragged = drag.moved;
+    const wasLongPress = drag.longPress;
     finishPointerInteraction();
     if (wasDragged) {
         rememberCurrentPosition();
     }
-    returnToAmbient();
+    if (wasDragged || wasLongPress) {
+        returnToAmbient();
+    }
+}
+
+function armStalePressTimer() {
+    window.clearTimeout(stalePressTimer);
+    stalePressTimer = window.setTimeout(abandonPointerInteraction, STALE_PRESS_TIMEOUT);
 }
 
 function finishPointerInteraction() {
+    window.clearTimeout(stalePressTimer);
+    stalePressTimer = undefined;
+    clearLongPressTimer();
     ui.root.classList.remove('is-pressed', 'is-dragging');
     drag.active = false;
     drag.moved = false;
     drag.pointerId = null;
+    drag.longPress = false;
+}
+
+function clearLongPressTimer() {
+    window.clearTimeout(longPressTimer);
+    longPressTimer = undefined;
+}
+
+function scheduleLongPress() {
+    clearLongPressTimer();
+    longPressTimer = window.setTimeout(() => {
+        longPressTimer = undefined;
+        if (!drag.active || drag.moved) {
+            return;
+        }
+
+        drag.longPress = true;
+        transitionTo(PET_STATES.PETTING, {
+            duration: 1800,
+            priority: 55,
+            force: true,
+        });
+        showCompanionReport();
+    }, LONG_PRESS_DURATION);
+}
+
+function clearPendingTap() {
+    window.clearTimeout(pendingTap?.timer);
+    pendingTap = undefined;
+}
+
+function registerTap(clientX, clientY) {
+    const now = Date.now();
+    if (
+        pendingTap
+        && now - pendingTap.time <= DOUBLE_TAP_WINDOW
+        && Math.hypot(clientX - pendingTap.x, clientY - pendingTap.y) <= DOUBLE_TAP_RADIUS
+    ) {
+        clearPendingTap();
+        doublePetXiaoyugao();
+        return;
+    }
+
+    clearPendingTap();
+    const tap = { time: now, x: clientX, y: clientY, timer: undefined };
+    tap.timer = window.setTimeout(() => {
+        if (pendingTap === tap) {
+            pendingTap = undefined;
+            petXiaoyugao();
+        }
+    }, DOUBLE_TAP_WINDOW);
+    pendingTap = tap;
+}
+
+function doublePetXiaoyugao() {
+    transitionTo(PET_STATES.NUZZLING, {
+        duration: NUZZLE_DURATION_MS,
+        bubble: '贴贴妈妈，再蹭一下～',
+        manual: true,
+        priority: 48,
+        force: true,
+    });
+}
+
+function handleContextMenuGuard(event) {
+    if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+        return;
+    }
+    if (!drag.active && !hitsXiaoyugao(event.clientX, event.clientY, 'touch')) {
+        return;
+    }
+    event.stopImmediatePropagation();
+    event.preventDefault();
+}
+
+function isSendTextarea(target) {
+    return target?.id === 'send_textarea' || target?.matches?.('#send_textarea');
+}
+
+function clearTypingAttention({ restore = false } = {}) {
+    window.clearTimeout(typingIdleTimer);
+    typingIdleTimer = undefined;
+    const wasActive = typingAttentionActive;
+    typingAttentionActive = false;
+    if (restore && wasActive && !isGenerating && !drag.active) {
+        returnToAmbient();
+    }
+}
+
+function handleTypingInput(event) {
+    if (!isSendTextarea(event.target)) {
+        return;
+    }
+
+    const hasText = String(event.target.value ?? '').trim().length > 0;
+    if (!hasText) {
+        clearTypingAttention({ restore: true });
+        return;
+    }
+    if (isGenerating || drag.longPress) {
+        return;
+    }
+
+    const firstKeystroke = !typingAttentionActive;
+    typingAttentionActive = true;
+    window.clearTimeout(typingIdleTimer);
+    if (firstKeystroke || renderer?.state !== PET_STATES.LISTENING) {
+        transitionTo(PET_STATES.LISTENING, {
+            priority: 22,
+            force: true,
+        });
+    }
+    if (firstKeystroke) {
+        showBubble('妈妈写字，小鱼糕认真看～', 1400);
+    }
+    typingIdleTimer = window.setTimeout(() => {
+        typingIdleTimer = undefined;
+        typingAttentionActive = false;
+        if (!isGenerating && !drag.active) {
+            returnToAmbient();
+        }
+    }, TYPING_IDLE_DELAY);
 }
 
 function handlePetKeydown(event) {
@@ -697,16 +1034,198 @@ function handlePetKeydown(event) {
     }
 
     event.preventDefault();
-    petXiaoyugao();
+    if (event.shiftKey) showCompanionReport();
+    else petXiaoyugao();
 }
 
 function petXiaoyugao() {
     transitionTo(PET_STATES.PETTING, {
         duration: 1900,
-        bubble: petLine('petting'),
+        bubble: '妈妈再摸摸～',
+        manual: true,
         priority: 40,
         force: true,
     });
+}
+
+function clearPoseTimer() {
+    window.clearTimeout(poseTimer);
+    poseTimer = undefined;
+}
+
+function clearAutoSwimTimer() {
+    window.clearTimeout(roamTimer);
+    roamTimer = undefined;
+}
+
+function cancelAutoSwim({ settle = true, remember = true } = {}) {
+    window.cancelAnimationFrame(roamFrame);
+    roamFrame = undefined;
+    const wasSwimming = Boolean(roamRun);
+    roamRun = undefined;
+    if (wasSwimming && remember && ui?.root && settings) {
+        rememberCurrentPosition();
+    }
+    if (wasSwimming && settle) {
+        renderer?.setForm('sitting');
+    }
+}
+
+function wakeXiaoyugao() {
+    clearPoseTimer();
+    clearAutoSwimTimer();
+    cancelAutoSwim({ settle: false });
+    renderer?.setForm('sitting');
+}
+
+function scheduleAutoLie() {
+    clearPoseTimer();
+    if (isGenerating || typingAttentionActive || drag.active || !settings?.enabled) {
+        return;
+    }
+    poseTimer = window.setTimeout(() => {
+        poseTimer = undefined;
+        if (isGenerating || typingAttentionActive || drag.active || renderer?.state !== PET_STATES.IDLE) {
+            return;
+        }
+        renderer.setForm('lying');
+        showBubble('陪妈妈待一会儿～', 1600);
+    }, AUTO_LIE_DELAY);
+}
+
+function scheduleAutoSwim() {
+    clearAutoSwimTimer();
+    if (
+        isGenerating
+        || typingAttentionActive
+        || drag.active
+        || roamRun
+        || !settings?.enabled
+        || !settings.autoSwim
+        || settings.reducedMotion
+    ) {
+        return;
+    }
+    const delay = AUTO_SWIM_MIN_DELAY + Math.random() * AUTO_SWIM_JITTER;
+    roamTimer = window.setTimeout(() => {
+        roamTimer = undefined;
+        startAutoSwim();
+    }, delay);
+}
+
+function chooseSwimTarget(preferredDirection = 0) {
+    const bounds = movementBounds();
+    const rect = ui.root.getBoundingClientRect();
+    const startLeft = clamp(
+        finiteNumber(Number.parseFloat(ui.root.style.left), rect.left),
+        bounds.minimumLeft,
+        bounds.maximumLeft,
+    );
+    const startTop = clamp(
+        finiteNumber(Number.parseFloat(ui.root.style.top), rect.top),
+        bounds.minimumTop,
+        bounds.maximumTop,
+    );
+    const roomLeft = startLeft - bounds.minimumLeft;
+    const roomRight = bounds.maximumLeft - startLeft;
+    let direction = Math.sign(preferredDirection);
+
+    if (!direction) {
+        if (roomLeft < SWIM_MIN_DISTANCE && roomRight < SWIM_MIN_DISTANCE) {
+            direction = roomRight >= roomLeft ? 1 : -1;
+        } else if (roomLeft < SWIM_MIN_DISTANCE) {
+            direction = 1;
+        } else if (roomRight < SWIM_MIN_DISTANCE) {
+            direction = -1;
+        } else {
+            direction = Math.random() < 0.5 ? -1 : 1;
+        }
+    }
+    if (direction < 0 && roomLeft < Math.min(SWIM_MIN_DISTANCE, roomRight)) {
+        direction = 1;
+    } else if (direction > 0 && roomRight < Math.min(SWIM_MIN_DISTANCE, roomLeft)) {
+        direction = -1;
+    }
+
+    const available = direction < 0 ? roomLeft : roomRight;
+    const requested = SWIM_MIN_DISTANCE + Math.random() * (SWIM_MAX_DISTANCE - SWIM_MIN_DISTANCE);
+    const distance = Math.min(requested, available);
+    return {
+        startLeft,
+        startTop,
+        targetLeft: startLeft + direction * distance,
+        direction,
+        distance,
+    };
+}
+
+function startAutoSwim(preferredDirection = 0, duration = SWIM_DURATION, { announce = false } = {}) {
+    if (!ui?.root || !renderer || !settings?.enabled || isGenerating || typingAttentionActive || drag.active) {
+        return false;
+    }
+    if (!announce && renderer.state !== PET_STATES.IDLE) {
+        scheduleAutoSwim();
+        return false;
+    }
+
+    clearPoseTimer();
+    clearAutoSwimTimer();
+    cancelAutoSwim({ settle: false });
+    window.clearTimeout(reactionTimer);
+    currentPriority = 0;
+    priorityUntil = 0;
+    const path = chooseSwimTarget(preferredDirection);
+    if (path.distance < 8) {
+        renderer.setForm('sitting');
+        scheduleAutoLie();
+        scheduleAutoSwim();
+        return false;
+    }
+
+    const safeDuration = clamp(finiteNumber(duration, SWIM_DURATION), 600, 6000);
+    // Keep the renderer's tail rhythm tied to the actual on-screen distance.
+    const strideLength = getSwimStrideLength(ui.root.getBoundingClientRect().width);
+    roamRun = { ...path, duration: safeDuration, strideLength, startedAt: undefined };
+    renderer.setSwimDirection(path.direction);
+    renderer.setSwimProgress(0, strideLength);
+    renderer.setState(PET_STATES.IDLE);
+    renderer.setForm('swimming');
+    ui.root.setAttribute('aria-label', '小鱼糕正在游过来陪你');
+    if (announce) {
+        showBubble('小鱼糕游一圈陪妈妈～', 1300, false, true);
+    }
+
+    const step = (now) => {
+        if (!roamRun) {
+            return;
+        }
+        if (roamRun.startedAt === undefined) {
+            roamRun.startedAt = now;
+        }
+        const progress = clamp((now - roamRun.startedAt) / roamRun.duration, 0, 1);
+        const eased = progress * progress * (3 - 2 * progress);
+        const currentLeft = roamRun.startLeft + (roamRun.targetLeft - roamRun.startLeft) * eased;
+        setPixelPosition(currentLeft, roamRun.startTop);
+        renderer.setSwimProgress(Math.abs(currentLeft - roamRun.startLeft), roamRun.strideLength);
+        if (progress < 1) {
+            roamFrame = window.requestAnimationFrame(step);
+            return;
+        }
+
+        roamFrame = undefined;
+        roamRun = undefined;
+        rememberCurrentPosition();
+        renderer.setForm('sitting');
+        renderer.setState(PET_STATES.IDLE);
+        ui.root.setAttribute('aria-label', stateLabels[PET_STATES.IDLE]);
+        if (announce) {
+            showBubble('换个地方继续冒泡泡～', 1200, false, true);
+        }
+        scheduleAutoLie();
+        scheduleAutoSwim();
+    };
+    roamFrame = window.requestAnimationFrame(step);
+    return true;
 }
 
 function transitionTo(state, {
@@ -714,10 +1233,13 @@ function transitionTo(state, {
     bubble = '',
     priority = 0,
     force = false,
+    manual = false,
 } = {}) {
     if (!renderer || !Object.values(PET_STATES).includes(state)) {
         return;
     }
+
+    if (state === PET_STATES.WAVE) duration = Math.max(duration, WAVE_DURATION_MS);
 
     const now = Date.now();
     if (!force && priority < currentPriority && now < priorityUntil) {
@@ -725,13 +1247,22 @@ function transitionTo(state, {
     }
 
     window.clearTimeout(reactionTimer);
+    if (state === PET_STATES.THINKING) {
+        clearPoseTimer();
+        renderer.setForm('sitting');
+    } else if (state === PET_STATES.SLEEPING) {
+        clearPoseTimer();
+        renderer.setForm('lying');
+    } else {
+        wakeXiaoyugao();
+    }
     currentPriority = priority;
     priorityUntil = duration > 0 ? now + duration : Number.POSITIVE_INFINITY;
     renderer.setState(state);
     ui.root.setAttribute('aria-label', stateLabels[state] ?? stateLabels[PET_STATES.IDLE]);
 
     if (bubble) {
-        showBubble(bubble, Math.min(Math.max(duration || 1600, 1000), 2200));
+        showBubble(bubble, Math.min(Math.max(duration || 1600, 1000), 2200), false, manual);
     }
 
     if (duration > 0) {
@@ -745,34 +1276,146 @@ function returnToAmbient() {
     priorityUntil = 0;
 
     const ambientState = isGenerating ? PET_STATES.THINKING : PET_STATES.IDLE;
+    if (isGenerating) {
+        renderer?.setForm('sitting');
+    }
     renderer?.setState(ambientState);
     ui?.root.setAttribute('aria-label', stateLabels[ambientState]);
 
     if (isGenerating) {
-        showBubble(petLine('thinking'), 0);
+        showBubble(thinkingCompanionMessage, 0);
     } else {
-        hideBubble();
+        if (!bubbleTimer) hideBubble();
+        scheduleAutoLie();
+        scheduleAutoSwim();
     }
 }
 
-function showBubble(message, duration = 1500) {
-    if (!ui?.bubble || !settings.showBubble || !message) {
+const bubbleScenes = {
+    '鱼仔妈妈，我来啦～': 'greeting', '妈妈回来啦！贴贴～': 'greeting', '小鱼糕游回右下角啦～': 'greeting',
+    '妈妈写字，小鱼糕认真看～': 'typing', '陪妈妈待一会儿～': 'idle', '妈妈说，小鱼糕听着呢': 'listening',
+    '奶盖宝宝正在想哦…': 'thinking', '这次要多捞一会儿灵感泡泡哦～': 'thinking', '还在认真想呢…': 'thinking',
+    '回信游回来啦！': 'reply', '好耶，奶盖宝宝回话啦！': 'reply', '妈妈去哪我去哪～': 'chat',
+    '妈妈再摸摸～': 'petting', '贴贴妈妈，再蹭一下～': 'nuzzling',
+    '妈妈要把我抱去哪呀？': 'dragging', '这里离妈妈近～': 'placed',
+    '小鱼糕游一圈陪妈妈～': 'swimming', '换个地方继续冒泡泡～': 'swimming',
+    '小鱼糕困嘟嘟…': 'sleeping', '咦，泡泡走丢了吗？': 'confused', '奶盖宝宝先歇一会儿？': 'stopped',
+    '帮妈妈想想怎么说～': 'impersonating', '帮妈妈写好啦～': 'impersonated',
+};
+
+function bubbleViewportBox(pet) {
+    const viewport = viewportBox();
+    // Keyboard panning can shift Safari's client rect origin relative to the
+    // fixed-position CSS coordinates. Measure that origin on the pet itself
+    // so the viewport and pet use the same coordinate space (no UA guessing).
+    const cssLeft = Number.parseFloat(ui.root.style.left);
+    const cssTop = Number.parseFloat(ui.root.style.top);
+    return {
+        ...viewport,
+        left: viewport.left + (Number.isFinite(cssLeft) ? pet.left - cssLeft : 0),
+        top: viewport.top + (Number.isFinite(cssTop) ? pet.top - cssTop : 0),
+    };
+}
+
+function followVisibleBubble() {
+    window.clearTimeout(bubbleFollowTimer);
+    bubbleFollowTimer = undefined;
+    if (!ui?.bubble.classList.contains('is-visible')) return;
+    bubbleFollowTimer = window.setTimeout(() => {
+        bubbleFollowTimer = undefined;
+        if (!document.hidden) positionBubble();
+        followVisibleBubble();
+    }, 100);
+}
+
+function positionBubble() {
+    if (!ui?.bubble) return;
+    const pet = ui.root.getBoundingClientRect();
+    const viewport = bubbleViewportBox(pet);
+    const margin = 8;
+    const gap = 10;
+    const leftEdge = viewport.left + margin;
+    const rightEdge = viewport.left + viewport.width - margin;
+    const topEdge = viewport.top + margin;
+    const bottomEdge = viewport.top + viewport.height - margin;
+    const speech = ui.bubble;
+    speech.style.maxWidth = `${Math.min(260, Math.max(1, viewport.width - margin * 2))}px`;
+    let width = speech.offsetWidth;
+    let height = speech.offsetHeight;
+    const headX = pet.left + pet.width / 2;
+    const headY = pet.top + pet.height * 0.13;
+    let placement = 'above';
+    let left = headX - width / 2;
+    let top = headY - height - gap;
+
+    if (top < topEdge) {
+        // At the top edge, move beside Xiaoyugao rather than over her belly.
+        const leftRoom = pet.left - gap - leftEdge;
+        const rightRoom = rightEdge - pet.left - pet.width - gap;
+        if (Math.max(leftRoom, rightRoom) >= 100) {
+            placement = leftRoom >= rightRoom ? 'left' : 'right';
+            speech.style.maxWidth = `${Math.min(260, placement === 'left' ? leftRoom : rightRoom)}px`;
+            width = speech.offsetWidth;
+            height = speech.offsetHeight;
+            left = placement === 'left' ? pet.left - gap - width : pet.left + pet.width + gap;
+            top = headY - height / 2;
+        } else {
+            placement = 'below';
+            top = pet.top + pet.height + gap;
+        }
+    }
+    left = clamp(left, leftEdge, Math.max(leftEdge, rightEdge - width));
+    top = clamp(top, topEdge, Math.max(topEdge, bottomEdge - height));
+    speech.style.left = `${left - pet.left}px`;
+    speech.style.top = `${top - pet.top}px`;
+    speech.dataset.placement = placement;
+    // Keep the tail pointing towards Xiaoyugao after viewport-edge clamping.
+    speech.style.setProperty('--xiaoyugao-tail-x', `${clamp(headX - left - 5, 12, Math.max(12, width - 23))}px`);
+    speech.style.setProperty('--xiaoyugao-tail-y', `${clamp(headY - top - 5, 12, Math.max(12, height - 23))}px`);
+}
+
+function showCompanionReport() {
+    if (!settings?.enabled) return;
+    reportUntil = 0;
+    showBubble(companion.say('report'), REPORT_BUBBLE_DURATION, true);
+    reportUntil = Date.now() + REPORT_BUBBLE_DURATION;
+    window.clearTimeout(bubbleTimer);
+    bubbleTimer = window.setTimeout(() => {
+        reportUntil = 0;
+        hideBubble();
+        if (isGenerating) showBubble(thinkingCompanionMessage, 0);
+    }, REPORT_BUBBLE_DURATION);
+}
+
+function showBubble(message, duration = 1500, literal = false, manual = literal) {
+    if (Date.now() < reportUntil) return;
+    if (!manual && (settings?.companionMode === 'quiet' || Date.now() < nextAmbientBubbleAt)) return;
+    if (!literal && companion && bubbleScenes[message]) message = companion.say(bubbleScenes[message]);
+    if (!ui?.bubble || !settings?.enabled || !settings.showBubble || !message) {
         return;
     }
 
+    nextAmbientBubbleAt = Date.now() + AMBIENT_BUBBLE_INTERVAL;
+    // Waiting still animates, but its bubble no longer occupies the page indefinitely.
+    if (!manual) duration = Math.min(duration > 0 ? duration : 5000, 5000);
     window.clearTimeout(bubbleTimer);
     bubbleTimer = undefined;
     ui.bubble.textContent = message;
     ui.bubble.classList.add('is-visible');
+    positionBubble();
+    followVisibleBubble();
     if (Number.isFinite(duration) && duration > 0) {
-        bubbleTimer = window.setTimeout(hideBubble, duration);
+        bubbleTimer = window.setTimeout(hideBubble, Math.min(5000, Math.max(duration, message.length * 100)));
     }
 }
 
 function hideBubble() {
+    if (Date.now() < reportUntil) return;
     window.clearTimeout(bubbleTimer);
     bubbleTimer = undefined;
     ui?.bubble.classList.remove('is-visible');
+    window.clearTimeout(bubbleFollowTimer);
+    bubbleFollowTimer = undefined;
 }
 
 function listen(eventName, handler) {
@@ -800,9 +1443,61 @@ function clearGenerationWatchdog() {
     generationWatchdog = undefined;
 }
 
-function clearGenerationFinishTimer() {
-    window.clearTimeout(generationFinishTimer);
-    generationFinishTimer = undefined;
+function clearGenerationEndTimer() {
+    window.clearTimeout(generationEndTimer);
+    generationEndTimer = undefined;
+}
+
+function armGenerationWatchdog() {
+    clearGenerationWatchdog();
+    generationWatchdog = window.setTimeout(() => {
+        if (!isGenerating) {
+            return;
+        }
+
+        // Give up waiting visibly, but keep listening: a reply that lands
+        // after this still gets its happy welcome instead of being ignored.
+        isGenerating = false;
+        awaitingLateReply = true;
+        clearThinkingCompanionTimers();
+        setSignalStatus('等太久了，先回来陪你；回信到了照样迎接');
+        transitionTo(PET_STATES.CONFUSED, {
+            duration: 1700,
+            bubble: '咦，泡泡走丢了吗？',
+            priority: 30,
+            force: true,
+        });
+    }, GENERATION_WATCHDOG_DELAY);
+}
+
+function clearThinkingCompanionTimers({ resetMessage = true } = {}) {
+    window.clearTimeout(thinkingBubble20Timer);
+    window.clearTimeout(thinkingBubble40Timer);
+    thinkingBubble20Timer = undefined;
+    thinkingBubble40Timer = undefined;
+    if (resetMessage) {
+        thinkingCompanionMessage = '奶盖宝宝正在想哦…';
+    }
+}
+
+function scheduleThinkingCompanionBubbles() {
+    clearThinkingCompanionTimers({ resetMessage: false });
+    thinkingBubble20Timer = window.setTimeout(() => {
+        thinkingBubble20Timer = undefined;
+        if (!isGenerating) {
+            return;
+        }
+        thinkingCompanionMessage = '这次要多捞一会儿灵感泡泡哦～';
+        showBubble(thinkingCompanionMessage, 0);
+    }, THINKING_COMPANION_DELAY);
+    thinkingBubble40Timer = window.setTimeout(() => {
+        thinkingBubble40Timer = undefined;
+        if (!isGenerating) {
+            return;
+        }
+        thinkingCompanionMessage = '还在认真想呢…';
+        showBubble(thinkingCompanionMessage, 0);
+    }, THINKING_COMPANION_DELAY * 2);
 }
 
 function setSignalStatus(message, source = '') {
@@ -816,25 +1511,15 @@ function setSignalStatus(message, source = '') {
     }
 }
 
-function beginThinking(source = 'event') {
+function beginThinking(source = 'event', message = '奶盖宝宝正在想哦…') {
+    clearTypingAttention();
+    clearPendingTap();
+    wakeXiaoyugao();
     isGenerating = true;
+    awaitingLateReply = false;
     setSignalStatus('已收到发送，正在等回信', typeof source === 'string' ? source : 'event');
-    clearGenerationFinishTimer();
-    clearGenerationWatchdog();
-    generationWatchdog = window.setTimeout(() => {
-        if (!isGenerating) {
-            return;
-        }
-
-        isGenerating = false;
-        setSignalStatus('等待超时，已经回到陪伴');
-        transitionTo(PET_STATES.CONFUSED, {
-            duration: 1700,
-            bubble: petLine('confused'),
-            priority: 30,
-            force: true,
-        });
-    }, 180000);
+    clearGenerationEndTimer();
+    armGenerationWatchdog();
 
     transitionTo(PET_STATES.THINKING, {
         priority: 25,
@@ -842,13 +1527,18 @@ function beginThinking(source = 'event') {
     });
     // A typing indicator should remain visible for the entire generation,
     // not just for the first animation beat.
-    showBubble(petLine('thinking'), 0);
+    thinkingCompanionMessage = message;
+    showBubble(message, 0);
+    scheduleThinkingCompanionBubbles();
 }
 
-function finishThinking(bubble = petLine('happy')) {
-    clearGenerationFinishTimer();
+function finishThinking(bubble = '回信游回来啦！') {
+    clearGenerationEndTimer();
     clearGenerationWatchdog();
+    clearThinkingCompanionTimers();
     isGenerating = false;
+    awaitingLateReply = false;
+    replyArrived = false;
     setSignalStatus('回复已到达');
     transitionTo(PET_STATES.HAPPY, {
         duration: 2100,
@@ -859,208 +1549,19 @@ function finishThinking(bubble = petLine('happy')) {
 }
 
 function stopThinkingManually() {
-    clearGenerationFinishTimer();
+    clearGenerationEndTimer();
     clearGenerationWatchdog();
+    clearThinkingCompanionTimers();
     isGenerating = false;
+    awaitingLateReply = false;
     setSignalStatus('生成已手动停止');
     transitionTo(PET_STATES.CONFUSED, {
         duration: 1700,
-        bubble: petLine('stopped'),
+        bubble: '奶盖宝宝先歇一会儿？',
         priority: 35,
         force: true,
     });
 }
-
-function chatLog() {
-    return Array.isArray(context?.chat) ? context.chat : [];
-}
-
-function resetObservedChatLength() {
-    observedChatLength = chatLog().length;
-}
-
-function inspectChatActivity() {
-    chatActivityFrame = undefined;
-    const chat = chatLog();
-
-    if (chat.length < observedChatLength) {
-        observedChatLength = chat.length;
-        return;
-    }
-
-    if (chat.length === observedChatLength) {
-        return;
-    }
-
-    const newEntries = chat.slice(observedChatLength);
-    observedChatLength = chat.length;
-
-    // This is a deliberate DOM-backed fallback for third-party input flows
-    // that render messages but skip one of SillyTavern's generation events.
-    for (const entry of newEntries) {
-        if (entry?.is_user === true) {
-            beginThinking('chat-observer');
-        } else if (entry?.is_user === false && isGenerating) {
-            if (streamingModeIsEnabled() || stopControlIsActive()) {
-                setSignalStatus('已看到流式开头，继续等完整回信', 'chat-observer');
-            } else {
-                scheduleGenerationFinish('chat-observer');
-            }
-        }
-    }
-}
-
-function scheduleChatActivityInspection() {
-    window.cancelAnimationFrame(chatActivityFrame);
-    chatActivityFrame = window.requestAnimationFrame(inspectChatActivity);
-}
-
-function bindChatActivityFallback() {
-    resetObservedChatLength();
-    const chatElement = document.getElementById('chat');
-    if (!chatElement || typeof MutationObserver !== 'function') {
-        return;
-    }
-
-    chatObserver = new MutationObserver(scheduleChatActivityInspection);
-    chatObserver.observe(chatElement, { childList: true });
-    cleanups.push(() => chatObserver?.disconnect());
-}
-
-function closestSignalControl(target, selector) {
-    if (typeof target?.closest === 'function') {
-        return target.closest(selector);
-    }
-    return target?.id === selector.slice(1) ? target : null;
-}
-
-function controlIsVisible(element) {
-    if (!element || element.classList?.contains('displayNone') || element.hidden) {
-        return false;
-    }
-
-    const styles = window.getComputedStyle(element);
-    return styles.display !== 'none' && styles.visibility !== 'hidden' && styles.opacity !== '0';
-}
-
-function stopControlIsActive() {
-    return controlIsVisible(document.getElementById('mes_stop'));
-}
-
-function streamingModeIsEnabled() {
-    const check = coreApi?.isStreamingEnabled ?? context?.isStreamingEnabled;
-    if (typeof check !== 'function') {
-        return false;
-    }
-
-    try {
-        return Boolean(check());
-    } catch {
-        return false;
-    }
-}
-
-function scheduleGenerationFinish(source = 'settled') {
-    if (!isGenerating) {
-        return;
-    }
-
-    clearGenerationFinishTimer();
-    generationFinishTimer = window.setTimeout(() => {
-        generationFinishTimer = undefined;
-        if (!isGenerating || stopControlIsActive()) {
-            return;
-        }
-
-        finishThinking();
-        setSignalStatus('完整回复已到达', source);
-    }, GENERATION_SETTLE_DELAY);
-}
-
-function handleDirectGenerationControl(event) {
-    const sendButton = closestSignalControl(event.target, SEND_BUTTON_SELECTOR);
-    if (sendButton) {
-        const textarea = document.getElementById('send_textarea');
-        if (!textarea || String(textarea.value ?? '').trim()) {
-            beginThinking('send-button');
-        }
-        return;
-    }
-
-    if (closestSignalControl(event.target, STOP_BUTTON_SELECTOR)) {
-        generationWasManuallyStopped = true;
-    }
-}
-
-function syncGenerationControls() {
-    generationControlFrame = undefined;
-    const nextActive = controlIsVisible(document.getElementById('mes_stop'));
-
-    if (nextActive && !generationControlActive) {
-        clearGenerationFinishTimer();
-        generationWasManuallyStopped = false;
-        beginThinking('stop-button');
-    } else if (!nextActive && generationControlActive && isGenerating) {
-        if (generationWasManuallyStopped) {
-            stopThinkingManually();
-        } else {
-            // SillyTavern may briefly swap controls while a streaming request
-            // is still settling. Match proven typing-indicator behaviour by
-            // requiring the Stop control to remain hidden for a short beat.
-            scheduleGenerationFinish('stop-button-hidden');
-        }
-    }
-
-    generationControlActive = nextActive;
-}
-
-function scheduleGenerationControlSync() {
-    window.cancelAnimationFrame(generationControlFrame);
-    generationControlFrame = window.requestAnimationFrame(syncGenerationControls);
-}
-
-function bindDirectInputSignals() {
-    // Capture before SillyTavern clears the textarea or swaps Send for Stop.
-    on(document, 'pointerdown', handleDirectGenerationControl, { capture: true, passive: true });
-    on(document, 'click', handleDirectGenerationControl, { capture: true, passive: true });
-
-    const controls = [
-        document.getElementById('send_but'),
-        document.getElementById('mes_stop'),
-    ].filter(Boolean);
-    const controlsHost = document.getElementById('rightSendForm');
-
-    generationControlActive = controlIsVisible(document.getElementById('mes_stop'));
-    if (generationControlActive) {
-        beginThinking('stop-button');
-    }
-
-    if ((controls.length || controlsHost) && typeof MutationObserver === 'function') {
-        generationControlObserver = new MutationObserver(scheduleGenerationControlSync);
-        for (const control of controls) {
-            generationControlObserver.observe(control, {
-                attributes: true,
-                attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
-            });
-        }
-        if (controlsHost) {
-            // Some themes replace the Send / Stop nodes instead of only
-            // changing their style. Observing the stable form catches both.
-            generationControlObserver.observe(controlsHost, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
-            });
-        }
-        cleanups.push(() => generationControlObserver?.disconnect());
-    }
-
-    setSignalStatus(lastSignalStatus);
-}
-
-let replyArrived = false;
-let generationEndTimer;
 
 /**
  * Canonical SillyTavern generation lifecycle (verified against release script.js):
@@ -1075,36 +1576,57 @@ let generationEndTimer;
  */
 function bindSillyTavernEvents() {
     listen('MESSAGE_SENT', () => {
-        transitionTo(PET_STATES.LISTENING, { duration: 1200, bubble: petLine('listening'), priority: 25, force: true });
+        clearTypingAttention();
+        clearPendingTap();
+        transitionTo(PET_STATES.LISTENING, { duration: 1200, bubble: '妈妈说，小鱼糕听着呢', priority: 25, force: true });
     });
 
     listen('GENERATION_STARTED', (type, _args, dryRun) => {
+        if (settings.enabled) companion.start(type, dryRun);
+        else companion.baseline();
         if (dryRun || type === 'quiet') {
             return; // token counting / background prompts from other extensions
         }
         replyArrived = false;
-        window.clearTimeout(generationEndTimer);
-        beginThinking(`GENERATION_STARTED:${type}`);
+        currentGenerationType = String(type ?? '');
+        clearGenerationEndTimer();
+        // Impersonation writes into the textarea and never emits
+        // MESSAGE_RECEIVED, so it gets its own wording and its own ending.
+        beginThinking(
+            `GENERATION_STARTED:${type}`,
+            currentGenerationType === 'impersonate' ? '帮妈妈想想怎么说～' : '奶盖宝宝正在想哦…',
+        );
     });
 
     listen('STREAM_TOKEN_RECEIVED', () => {
         renderer?.pulse();
+        if (isGenerating) {
+            armGenerationWatchdog();
+        }
     });
 
     listen('MESSAGE_RECEIVED', (_messageId, type) => {
-        if (type === 'quiet' || !isGenerating && !generationEndTimer) {
+        if (settings.enabled) companion.receive(_messageId, type);
+        if (type === 'quiet' || !isGenerating && !generationEndTimer && !awaitingLateReply) {
             return;
         }
         replyArrived = true;
-        window.clearTimeout(generationEndTimer);
-        generationEndTimer = undefined;
+        clearGenerationEndTimer();
         finishThinking();
+    });
+
+    listen('IMPERSONATE_READY', () => {
+        if (!isGenerating && !generationEndTimer && !awaitingLateReply) {
+            return;
+        }
+        replyArrived = true;
+        clearGenerationEndTimer();
+        finishThinking('帮妈妈写好啦～');
     });
 
     listen('GENERATION_STOPPED', () => {
         replyArrived = true; // suppress the "结束啦?" follow-up from GENERATION_ENDED
-        window.clearTimeout(generationEndTimer);
-        generationEndTimer = undefined;
+        clearGenerationEndTimer();
         stopThinkingManually();
     });
 
@@ -1113,29 +1635,42 @@ function bindSillyTavernEvents() {
             return;
         }
         clearGenerationWatchdog();
+        clearThinkingCompanionTimers();
         isGenerating = false;
         if (replyArrived) {
             return; // non-streaming: HAPPY already played
         }
+        if (currentGenerationType === 'impersonate') {
+            // Older builds have no IMPERSONATE_READY; the end of the run is the result.
+            finishThinking('帮妈妈写好啦～');
+            return;
+        }
         // streaming: MESSAGE_RECEIVED lands a few ms after this. Give it a beat.
-        window.clearTimeout(generationEndTimer);
+        clearGenerationEndTimer();
         generationEndTimer = window.setTimeout(() => {
             generationEndTimer = undefined;
             if (replyArrived) {
                 return;
             }
             setSignalStatus('生成结束但没有回信（报错？）', 'GENERATION_ENDED');
-            transitionTo(PET_STATES.CONFUSED, { duration: 1700, bubble: petLine('confused'), priority: 30, force: true });
+            transitionTo(PET_STATES.CONFUSED, { duration: 1700, bubble: '咦，泡泡走丢了吗？', priority: 30, force: true });
         }, 400);
     });
 
     listen('CHAT_CHANGED', () => {
+        companion.baseline();
+        refreshBubbleEditor?.();
+        reportUntil = 0;
+        hideBubble();
+        clearTypingAttention();
+        clearThinkingCompanionTimers();
         clearGenerationWatchdog();
-        window.clearTimeout(generationEndTimer);
-        generationEndTimer = undefined;
+        clearGenerationEndTimer();
         isGenerating = false;
+        awaitingLateReply = false;
+        currentGenerationType = '';
         setSignalStatus('已切换聊天，等待发送');
-        transitionTo(PET_STATES.WAVE, { duration: 1700, bubble: petLine('wave'), priority: 30, force: true });
+        transitionTo(PET_STATES.WAVE, { duration: 1700, bubble: '妈妈去哪我去哪～', priority: 30, force: true });
     });
 }
 
@@ -1154,19 +1689,20 @@ function bindViewportEvents() {
 }
 
 function bindCustomReactionEvent() {
-    on(window, 'xiaoyugao:react', (event) => {
+    const react = (event) => {
         const state = event.detail?.state;
         if (!Object.values(PET_STATES).includes(state)) {
             return;
         }
 
         transitionTo(state, {
-            duration: clamp(Number(event.detail?.duration) || 1800, 300, 10000),
+            duration: clamp(Number(event.detail?.duration) || (state === PET_STATES.NUZZLING ? NUZZLE_DURATION_MS : 1800), 300, 10000),
             bubble: String(event.detail?.message ?? ''),
             priority: 30,
             force: true,
         });
-    });
+    };
+    on(window, 'xiaoyugao:react', react);
 }
 
 export function destroy() {
@@ -1181,14 +1717,22 @@ export function destroy() {
     window.clearTimeout(bootTimer);
     window.clearTimeout(reactionTimer);
     window.clearTimeout(bubbleTimer);
+    window.clearTimeout(bubbleFollowTimer);
     window.cancelAnimationFrame(positionFrame);
     window.cancelAnimationFrame(hoverFrame);
     window.cancelAnimationFrame(settingsLayerFrame);
     window.clearTimeout(settingsLayerTimer);
-    clearGenerationFinishTimer();
+    clearGenerationEndTimer();
     clearGenerationWatchdog();
-    window.cancelAnimationFrame(chatActivityFrame);
-    window.cancelAnimationFrame(generationControlFrame);
+    clearThinkingCompanionTimers();
+    clearTypingAttention();
+    clearLongPressTimer();
+    window.clearTimeout(stalePressTimer);
+    stalePressTimer = undefined;
+    clearPendingTap();
+    clearPoseTimer();
+    clearAutoSwimTimer();
+    cancelAutoSwim({ settle: false, remember: false });
     renderer?.destroy();
     ui?.root?.remove();
     document.getElementById('xiaoyugao-settings')?.remove();
@@ -1200,34 +1744,40 @@ export function destroy() {
     context = undefined;
     coreApi = undefined;
     settings = undefined;
+    companion = undefined;
+    reportUntil = 0;
+    nextAmbientBubbleAt = 0;
+    refreshBubbleEditor = undefined;
     renderer = undefined;
     ui = undefined;
     initializePromise = undefined;
     reactionTimer = undefined;
     bubbleTimer = undefined;
+    bubbleFollowTimer = undefined;
     positionFrame = undefined;
     hoverFrame = undefined;
     bootTimer = undefined;
     settingsLayerFrame = undefined;
     settingsLayerTimer = undefined;
     generationWatchdog = undefined;
-    generationFinishTimer = undefined;
-    chatActivityFrame = undefined;
-    chatObserver = undefined;
-    generationControlFrame = undefined;
-    generationControlObserver = undefined;
-    generationControlActive = false;
-    generationWasManuallyStopped = false;
-    observedChatLength = 0;
+    generationEndTimer = undefined;
+    replyArrived = false;
+    awaitingLateReply = false;
+    currentGenerationType = '';
     lastSignalStatus = '待命，等你发消息';
     currentPriority = 0;
     priorityUntil = 0;
     isGenerating = false;
     publicApi = undefined;
     clickGuard = undefined;
+    poseTimer = undefined;
+    roamTimer = undefined;
+    roamFrame = undefined;
+    roamRun = undefined;
     drag.active = false;
     drag.moved = false;
     drag.pointerId = null;
+    drag.longPress = false;
 }
 
 export function onDisable() {
@@ -1251,6 +1801,7 @@ async function initialize() {
         context = SillyTavern.getContext();
         coreApi = await loadSillyTavernCoreApi();
         settings = getSettings();
+        companion = new Companion(settings, () => SillyTavern.getContext(), saveSettings);
         ui = createPetUi();
         renderer = new XiaoyugaoRenderer(ui.canvas);
         renderer.setReducedMotion(settings.reducedMotion);
@@ -1259,36 +1810,53 @@ async function initialize() {
         applyVisualSettings();
         applyStoredPosition();
         await createSettingsUi();
-        // v0.3.6: the DOM/button/chat-observer fallbacks were the cause of the
-        // stuck "让我想想…" (they re-entered thinking on quiet/dryRun generations
-        // and ignored GENERATION_ENDED). Events alone are sufficient and exact.
+        // SillyTavern's own events are sufficient and exact. The old DOM /
+        // button / chat-observer fallbacks re-entered thinking on quiet and
+        // dryRun generations and were removed in v0.3.6.
         bindSillyTavernEvents();
         bindViewportEvents();
         bindCustomReactionEvent();
 
         transitionTo(PET_STATES.WAVE, {
             duration: 1800,
-            bubble: petLine('hello'),
+            bubble: '鱼仔妈妈，我来啦～',
             priority: 30,
             force: true,
         });
 
-        // A tiny debug/integration surface for future affection and feeding modules.
+        // Companion and animation integration surface.
         publicApi = Object.freeze({
             states: PET_STATES,
+            report: showCompanionReport,
+            companionStatus: () => companion?.values(),
             destroy,
             status() {
                 return Object.freeze({
                     state: renderer?.state,
+                    form: renderer?.currentForm(performance.now()),
                     isGenerating,
                     signal: lastSignalStatus,
-                    generationControlActive,
+                    awaitingLateReply,
                 });
             },
-            react(state, message = '', duration = 1800) {
+            react(state, message = '', duration = state === PET_STATES.NUZZLING ? NUZZLE_DURATION_MS : 1800) {
                 window.dispatchEvent(new CustomEvent('xiaoyugao:react', {
                     detail: { state, message, duration },
                 }));
+            },
+            nuzzle() {
+                doublePetXiaoyugao();
+            },
+            lieDown() {
+                clearPoseTimer();
+                renderer?.setForm('lying');
+                showBubble('趴趴～', 1200, false, true);
+            },
+            sitUp() {
+                wakeXiaoyugao();
+            },
+            swim(direction = 0, duration = SWIM_DURATION) {
+                return startAutoSwim(direction, duration, { announce: true });
             },
         });
         window.XiaoyugaoPet = publicApi;

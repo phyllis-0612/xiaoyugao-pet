@@ -103,7 +103,7 @@
         </section>
         <section class="controls">
             <h1>小鱼糕动作检查台</h1>
-            <p>这是独立预览，不需要启动 SillyTavern。点按钮检查首版的八种状态。</p>
+            <p>这是独立预览，不需要启动 SillyTavern。可以检查九种表情动作、趴姿，以及向左／向右游动时的尾巴节奏。</p>
             <div class="buttons">
                 <button data-state="idle">陪伴</button>
                 <button data-state="listening">听你说</button>
@@ -111,9 +111,20 @@
                 <button data-state="happy">开心</button>
                 <button data-state="confused">迷糊</button>
                 <button data-state="petting">摸摸</button>
+                <button data-state="nuzzling">贴贴蹭蹭</button>
                 <button data-state="sleeping">困嘟嘟</button>
-                <button data-state="wave">挥爪</button>
+                <button data-state="wave">挥爪打招呼</button>
+                <button data-form="swimming" data-direction="-1">向左游</button>
+                <button data-form="swimming" data-direction="1">向右游</button>
             </div>
+            <label>
+                <input id="pause-swim" type="checkbox" />
+                暂停游动，逐帧检查
+            </label>
+            <label>
+                游动进度
+                <input id="swim-phase" type="range" min="0" max="1000" value="0" aria-label="游动进度" style="min-width:0;flex:1" />
+            </label>
             <label>
                 <input id="reduce-motion" type="checkbox" />
                 减少动态效果
@@ -122,21 +133,67 @@
     </main>
 
     <script type="module">
-        import { XiaoyugaoRenderer, PET_STATES } from './pet-renderer.js';
+        import { XiaoyugaoRenderer, PET_STATES, NUZZLE_DURATION_MS, WAVE_DURATION_MS } from './pet-renderer.js';
 
         const canvas = document.getElementById('xiaoyugao-preview');
         const renderer = new XiaoyugaoRenderer(canvas);
         renderer.start();
 
+        let reactionTimer;
+        let swimming = false;
+        let phase = 0;
+        let lastTick = 0;
+        const pauseSwim = document.getElementById('pause-swim');
+        const phaseSlider = document.getElementById('swim-phase');
+        const tick = (now) => {
+            const delta = lastTick ? Math.min(80, now - lastTick) : 0;
+            lastTick = now;
+            if (swimming && !renderer.reducedMotion && !pauseSwim.checked && !document.hidden) {
+                phase = (phase + delta / 1500) % 1;
+                renderer.setSwimProgress(phase, 1);
+                phaseSlider.value = String(Math.round(phase * 1000));
+            }
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+        phaseSlider.addEventListener('input', () => {
+            pauseSwim.checked = true;
+            phase = Number(phaseSlider.value) / 1000;
+            renderer.setSwimProgress(phase, 1);
+            renderer.draw(performance.now());
+        });
+
         const setState = (state) => {
+            clearTimeout(reactionTimer);
+            swimming = false;
+            renderer.setForm(
+                state === PET_STATES.SLEEPING
+                    ? 'lying'
+                    : 'sitting',
+            );
             renderer.setState(state);
-            document.querySelectorAll('[data-state]').forEach((button) => {
+            if ([PET_STATES.NUZZLING, PET_STATES.WAVE].includes(state)) {
+                reactionTimer = setTimeout(() => setState(PET_STATES.IDLE), state === PET_STATES.WAVE ? WAVE_DURATION_MS : NUZZLE_DURATION_MS);
+            }
+            document.querySelectorAll('button').forEach((button) => {
                 button.classList.toggle('is-active', button.dataset.state === state);
             });
         };
 
         document.querySelectorAll('[data-state]').forEach((button) => {
             button.addEventListener('click', () => setState(button.dataset.state));
+        });
+
+        document.querySelectorAll('[data-form="swimming"]').forEach((button) => {
+            button.addEventListener('click', () => {
+                clearTimeout(reactionTimer);
+                swimming = true;
+                renderer.setSwimDirection(Number(button.dataset.direction));
+                renderer.setForm('swimming');
+                renderer.setState(PET_STATES.IDLE);
+                document.querySelectorAll('button').forEach((candidate) => candidate.classList.remove('is-active'));
+                button.classList.add('is-active');
+            });
         });
 
         document.getElementById('reduce-motion').addEventListener('change', (event) => {
@@ -147,4 +204,3 @@
     </script>
 </body>
 </html>
-

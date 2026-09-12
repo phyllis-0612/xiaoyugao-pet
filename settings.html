@@ -18,12 +18,16 @@
                     <input id="xiaoyugao-reduced-motion" type="checkbox" />
                     <span>减少动态效果</span>
                 </label>
+                <label class="checkbox_label" for="xiaoyugao-auto-swim">
+                    <input id="xiaoyugao-auto-swim" type="checkbox" />
+                    <span>让小鱼糕自己游一游</span>
+                </label>
             </div>
 
             <div class="xiaoyugao-settings-grid">
                 <div class="xiaoyugao-setting-row">
                     <label for="xiaoyugao-scale">小鱼糕大小</label>
-                    <input id="xiaoyugao-scale" type="range" min="70" max="150" step="5" />
+                    <input id="xiaoyugao-scale" type="range" min="40" max="150" step="5" />
                     <output id="xiaoyugao-scale-value" for="xiaoyugao-scale">100%</output>
                 </div>
                 <div class="xiaoyugao-setting-row">
@@ -43,6 +47,39 @@
                 小鱼糕回到右下角
             </button>
 
+            <button id="xiaoyugao-preview-swim" class="menu_button" type="button">
+                <i class="fa-solid fa-water"></i>
+                小鱼糕游一圈
+            </button>
+
+            <details class="xiaoyugao-companion-settings" open>
+                <summary>小气泡与陪伴</summary>
+                <label for="xiaoyugao-companion-mode">陪伴方式</label>
+                <select id="xiaoyugao-companion-mode" class="text_pole">
+                    <option value="daily">日常陪伴</option>
+                    <option value="quiet">安静陪伴</option>
+                </select>
+                <small>安静时只回应你的摸摸、双击贴贴、长按和设置预览，动作与今日统计照常。日常主动气泡至少间隔 10 秒，每次最多显示 5 秒。</small>
+                <p>长按小鱼糕，就能听她报时间和今天的聊天统计。</p>
+                <button id="xiaoyugao-report" class="menu_button" type="button">听听今日播报</button>
+                <label for="xiaoyugao-bubble-scope">台词用在哪里</label>
+                <select id="xiaoyugao-bubble-scope" class="text_pole">
+                    <option value="general">所有角色通用</option>
+                    <option value="card">当前角色专属</option>
+                </select>
+                <small id="xiaoyugao-bubble-scope-label"></small>
+                <label for="xiaoyugao-bubble-scene">选择说话场景</label>
+                <select id="xiaoyugao-bubble-scene" class="text_pole"></select>
+                <label for="xiaoyugao-bubble-lines">每行一句，小鱼糕随机说（最多 30 句，每句 240 字）</label>
+                <textarea id="xiaoyugao-bubble-lines" class="text_pole" rows="5" maxlength="7500" placeholder="写下你想听小鱼糕说的话"></textarea>
+                <small>自动保存；专属台词留空继承通用，通用台词留空使用默认。可用：{时间}、{时段}、{角色名}、{今日卡数}、{今日层数}。</small>
+                <div class="xiaoyugao-preview-actions">
+                    <button id="xiaoyugao-bubble-preview" class="menu_button" type="button">预览这句</button>
+                    <button id="xiaoyugao-bubble-reset" class="menu_button" type="button">恢复此场景默认</button>
+                </div>
+                <p class="xiaoyugao-count-note">按设备当地时间每日归零，从启用后开始记录。今日层数只记新收到的角色回复；重生成、续写、切换候选和翻阅旧聊天不加数。卡数按有新回复的角色去重。关闭小鱼糕时暂停统计。</p>
+            </details>
+
             <div class="xiaoyugao-preview-title">戳戳看小鱼糕的动作</div>
             <div class="xiaoyugao-preview-actions">
                 <button class="menu_button" type="button" data-xiaoyugao-preview="idle">陪伴</button>
@@ -51,11 +88,12 @@
                 <button class="menu_button" type="button" data-xiaoyugao-preview="happy">开心</button>
                 <button class="menu_button" type="button" data-xiaoyugao-preview="confused">迷糊</button>
                 <button class="menu_button" type="button" data-xiaoyugao-preview="petting">摸摸</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="nuzzling">贴贴蹭蹭</button>
                 <button class="menu_button" type="button" data-xiaoyugao-preview="sleeping">困嘟嘟</button>
-                <button class="menu_button" type="button" data-xiaoyugao-preview="wave">挥爪</button>
+                <button class="menu_button" type="button" data-xiaoyugao-preview="wave">挥爪打招呼</button>
             </div>
 
-            <p class="xiaoyugao-settings-footer">GPT × Ripple 一起搓的，不许喂成可露丽那么胖。</p>
+            <p class="xiaoyugao-settings-footer">鱼仔 × 奶盖一起搓的，小鱼糕陪妈妈把故事慢慢写下去。</p>
         </div>
     </div>
 </div>
